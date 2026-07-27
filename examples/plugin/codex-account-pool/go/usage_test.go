@@ -133,6 +133,121 @@ func TestUsageTrackerReportsMissingStore(t *testing.T) {
 	}
 }
 
+func TestUsageTrackerInitialConfigureMergesDiskAndMemory(t *testing.T) {
+	oldTime := time.Date(2026, time.July, 26, 10, 0, 0, 0, time.UTC)
+	newTime := oldTime.Add(24 * time.Hour)
+	store := newStateStore(t.TempDir())
+	diskUsage := AccountUsage{
+		Requests:            math.MaxInt64,
+		FailedRequests:      math.MaxInt64,
+		InputTokens:         math.MaxInt64 - 5,
+		OutputTokens:        math.MaxInt64 - 5,
+		ReasoningTokens:     math.MaxInt64 - 5,
+		CacheReadTokens:     math.MaxInt64 - 5,
+		CacheCreationTokens: math.MaxInt64 - 5,
+		TotalTokens:         math.MaxInt64 - 5,
+		UpdatedAt:           oldTime,
+	}
+	if err := store.saveUsage(UsageDocument{
+		Version:  stateVersion,
+		Accounts: map[string]AccountUsage{"auth-a": diskUsage},
+	}); err != nil {
+		t.Fatalf("seed usage: %v", err)
+	}
+
+	tracker := newUsageTracker(func() time.Time { return newTime }, time.Hour)
+	t.Cleanup(func() {
+		if err := tracker.shutdown(); err != nil {
+			t.Fatalf("shutdown usage tracker: %v", err)
+		}
+	})
+	tracker.observe(pluginapi.UsageRecord{
+		Provider: "codex",
+		AuthID:   "auth-a",
+		Failed:   true,
+		Detail: pluginapi.UsageDetail{
+			InputTokens:         10,
+			OutputTokens:        10,
+			ReasoningTokens:     10,
+			CacheReadTokens:     10,
+			CacheCreationTokens: 10,
+			TotalTokens:         10,
+		},
+	})
+	tracker.observe(usageRecord("auth-memory", 3, 5))
+
+	if err := tracker.configureStore(store); err != nil {
+		t.Fatalf("configure store: %v", err)
+	}
+	got := tracker.snapshot()
+	assertAccountUsage(t, got.Accounts["auth-a"], AccountUsage{
+		Requests:            math.MaxInt64,
+		FailedRequests:      math.MaxInt64,
+		InputTokens:         math.MaxInt64,
+		OutputTokens:        math.MaxInt64,
+		ReasoningTokens:     math.MaxInt64,
+		CacheReadTokens:     math.MaxInt64,
+		CacheCreationTokens: math.MaxInt64,
+		TotalTokens:         math.MaxInt64,
+		UpdatedAt:           newTime,
+	})
+	assertAccountUsage(t, got.Accounts["auth-memory"], AccountUsage{
+		Requests:     1,
+		InputTokens:  3,
+		OutputTokens: 5,
+		TotalTokens:  8,
+		UpdatedAt:    newTime,
+	})
+	if !tracker.isDirty() {
+		t.Fatal("initial configure cleared merged usage")
+	}
+
+	if err := tracker.flush(); err != nil {
+		t.Fatalf("flush merged usage: %v", err)
+	}
+	persisted, err := store.loadUsage()
+	if err != nil {
+		t.Fatalf("load merged usage: %v", err)
+	}
+	assertAccountUsage(t, persisted.Accounts["auth-a"], got.Accounts["auth-a"])
+	assertAccountUsage(t, persisted.Accounts["auth-memory"], got.Accounts["auth-memory"])
+}
+
+func TestUsageTrackerInitialConfigurePreservesMemoryAfterCorruptLoad(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, usageFileName), []byte("{not-json"), 0o600); err != nil {
+		t.Fatalf("write corrupt usage: %v", err)
+	}
+	tracker := newUsageTracker(time.Now, time.Hour)
+	tracker.observe(usageRecord("auth-memory", 3, 5))
+
+	if err := tracker.configureStore(newStateStore(dir)); err != nil {
+		t.Fatalf("configure corrupt store: %v", err)
+	}
+	got := tracker.snapshot().Accounts["auth-memory"]
+	if got.Requests != 1 || got.TotalTokens != 8 {
+		t.Fatalf("pre-config usage was not retained: %#v", got)
+	}
+	if !tracker.isDirty() {
+		t.Fatal("corrupt load cleared pre-config dirty usage")
+	}
+	degraded, message := tracker.health()
+	if !degraded || message == "" {
+		t.Fatalf("health = (%v, %q), want degraded with message", degraded, message)
+	}
+
+	if err := tracker.shutdown(); err != nil {
+		t.Fatalf("shutdown usage tracker: %v", err)
+	}
+	persisted, err := newStateStore(dir).loadUsage()
+	if err != nil {
+		t.Fatalf("load repaired usage: %v", err)
+	}
+	if persisted.Accounts["auth-memory"].TotalTokens != 8 {
+		t.Fatalf("persisted usage = %#v", persisted)
+	}
+}
+
 func TestUsageTrackerSaturatesAllCounters(t *testing.T) {
 	dir := t.TempDir()
 	store := newStateStore(dir)
@@ -231,6 +346,64 @@ func TestUsageTrackerMergesBurstAndPersistsForRestart(t *testing.T) {
 	got := restarted.snapshot().Accounts["auth-a"]
 	if got.Requests != 2 || got.InputTokens != 7 || got.OutputTokens != 10 || got.TotalTokens != 17 {
 		t.Fatalf("restarted usage = %#v", got)
+	}
+}
+
+func TestUsageTrackerKeepsDirtyWhenObserveRacesWithSave(t *testing.T) {
+	store := newStateStore(t.TempDir())
+	tracker := newUsageTracker(time.Now, time.Hour)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	t.Cleanup(func() {
+		if err := tracker.shutdown(); err != nil {
+			t.Fatalf("shutdown usage tracker: %v", err)
+		}
+	})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	if err := tracker.configureStore(store); err != nil {
+		t.Fatalf("configure store: %v", err)
+	}
+
+	var saves atomic.Int64
+	tracker.save = func(store *stateStore, doc UsageDocument) error {
+		if saves.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		return store.saveUsage(doc)
+	}
+	tracker.observe(usageRecord("auth-a", 2, 3))
+	flushDone := make(chan error, 1)
+	go func() {
+		flushDone <- tracker.flush()
+	}()
+
+	waitForSignal(t, started, time.Second, "first save started")
+	tracker.observe(usageRecord("auth-a", 5, 7))
+	close(release)
+	if err := waitForResult(t, flushDone, time.Second, "first save completed"); err != nil {
+		t.Fatalf("first flush: %v", err)
+	}
+	if !tracker.isDirty() {
+		t.Fatal("first flush cleared concurrent usage")
+	}
+	if err := tracker.flush(); err != nil {
+		t.Fatalf("second flush: %v", err)
+	}
+
+	persisted, err := store.loadUsage()
+	if err != nil {
+		t.Fatalf("load usage: %v", err)
+	}
+	got := persisted.Accounts["auth-a"]
+	if got.Requests != 2 || got.InputTokens != 7 || got.OutputTokens != 10 || got.TotalTokens != 17 {
+		t.Fatalf("concurrent usage was not persisted: %#v", got)
 	}
 }
 
@@ -419,6 +592,39 @@ func TestUsageTrackerShutdownFlushesWithLongInterval(t *testing.T) {
 	}
 }
 
+func TestUsageTrackerRejectsConfigureAfterShutdown(t *testing.T) {
+	oldStore := newStateStore(t.TempDir())
+	newStore := newStateStore(t.TempDir())
+	if err := newStore.saveUsage(UsageDocument{
+		Version: stateVersion,
+		Accounts: map[string]AccountUsage{
+			"auth-new": {Requests: 9, TotalTokens: 99},
+		},
+	}); err != nil {
+		t.Fatalf("seed new store: %v", err)
+	}
+	tracker := newUsageTracker(time.Now, time.Hour)
+	if err := tracker.configureStore(oldStore); err != nil {
+		t.Fatalf("configure old store: %v", err)
+	}
+	tracker.observe(usageRecord("auth-old", 3, 5))
+	if err := tracker.shutdown(); err != nil {
+		t.Fatalf("shutdown usage tracker: %v", err)
+	}
+
+	err := tracker.configureStore(newStore)
+	if err == nil {
+		t.Fatal("configure succeeded after shutdown")
+	}
+	if tracker.store != oldStore {
+		t.Fatal("configure after shutdown replaced the state store")
+	}
+	got := tracker.snapshot()
+	if len(got.Accounts) != 1 || got.Accounts["auth-old"].TotalTokens != 8 {
+		t.Fatalf("configure after shutdown replaced usage: %#v", got)
+	}
+}
+
 func TestUsageTrackerSameStoreDoesNotReloadMemory(t *testing.T) {
 	dir := t.TempDir()
 	store := newStateStore(dir)
@@ -483,5 +689,25 @@ func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool
 			t.Fatalf("timed out waiting for %s", description)
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+func waitForSignal(t *testing.T, signal <-chan struct{}, timeout time.Duration, description string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(timeout):
+		t.Fatalf("timed out waiting for %s", description)
+	}
+}
+
+func waitForResult(t *testing.T, result <-chan error, timeout time.Duration, description string) error {
+	t.Helper()
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(timeout):
+		t.Fatalf("timed out waiting for %s", description)
+		return nil
 	}
 }

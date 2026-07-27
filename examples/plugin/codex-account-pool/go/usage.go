@@ -137,8 +137,17 @@ func (t *usageTracker) configureStore(store *stateStore) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	if t.stopped {
+		return fmt.Errorf("usage tracker is shut down")
+	}
 	if t.store != nil && t.store.dir == store.dir {
 		return nil
+	}
+	initialConfigure := t.store == nil
+	preConfigDirty := initialConfigure && t.dirty
+	preConfigDoc := defaultUsageDocument()
+	if preConfigDirty {
+		preConfigDoc = cloneUsageDocument(t.doc)
 	}
 	if t.store != nil && t.dirty {
 		if err := t.save(t.store, cloneUsageDocument(t.doc)); err != nil {
@@ -151,16 +160,24 @@ func (t *usageTracker) configureStore(store *stateStore) error {
 	}
 
 	doc, err := store.loadUsage()
+	if err != nil {
+		doc = defaultUsageDocument()
+	}
 	t.store = store
 	t.revision++
-	t.dirty = false
+	if preConfigDirty {
+		t.doc = mergeUsageDocuments(doc, preConfigDoc)
+		t.dirty = true
+		t.notify()
+	} else {
+		t.doc = cloneUsageDocument(doc)
+		t.dirty = false
+	}
 	if err != nil {
-		t.doc = defaultUsageDocument()
 		t.degraded = true
 		t.lastError = sanitizeError(err)
 		return nil
 	}
-	t.doc = cloneUsageDocument(doc)
 	t.degraded = false
 	t.lastError = ""
 	return nil
@@ -288,6 +305,29 @@ func cloneUsageDocument(doc UsageDocument) UsageDocument {
 	out := doc
 	out.Accounts = make(map[string]AccountUsage, len(doc.Accounts))
 	for authID, account := range doc.Accounts {
+		out.Accounts[authID] = account
+	}
+	return out
+}
+
+func mergeUsageDocuments(base, delta UsageDocument) UsageDocument {
+	out := cloneUsageDocument(base)
+	if out.Version == 0 {
+		out.Version = stateVersion
+	}
+	for authID, addition := range delta.Accounts {
+		account := out.Accounts[authID]
+		account.Requests = saturatingAdd(account.Requests, addition.Requests)
+		account.FailedRequests = saturatingAdd(account.FailedRequests, addition.FailedRequests)
+		account.InputTokens = saturatingAdd(account.InputTokens, addition.InputTokens)
+		account.OutputTokens = saturatingAdd(account.OutputTokens, addition.OutputTokens)
+		account.ReasoningTokens = saturatingAdd(account.ReasoningTokens, addition.ReasoningTokens)
+		account.CacheReadTokens = saturatingAdd(account.CacheReadTokens, addition.CacheReadTokens)
+		account.CacheCreationTokens = saturatingAdd(account.CacheCreationTokens, addition.CacheCreationTokens)
+		account.TotalTokens = saturatingAdd(account.TotalTokens, addition.TotalTokens)
+		if !addition.UpdatedAt.IsZero() && (account.UpdatedAt.IsZero() || addition.UpdatedAt.After(account.UpdatedAt)) {
+			account.UpdatedAt = addition.UpdatedAt
+		}
 		out.Accounts[authID] = account
 	}
 	return out
