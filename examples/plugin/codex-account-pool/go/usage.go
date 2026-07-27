@@ -160,11 +160,15 @@ func (t *usageTracker) configureStore(store *stateStore) error {
 	}
 
 	doc, err := store.loadUsage()
-	if err != nil {
-		doc = defaultUsageDocument()
-	}
 	t.store = store
 	t.revision++
+	if err != nil {
+		t.doc = defaultUsageDocument()
+		t.dirty = false
+		t.degraded = true
+		t.lastError = sanitizeError(err)
+		return nil
+	}
 	if preConfigDirty {
 		t.doc = mergeUsageDocuments(doc, preConfigDoc)
 		t.dirty = true
@@ -172,11 +176,6 @@ func (t *usageTracker) configureStore(store *stateStore) error {
 	} else {
 		t.doc = cloneUsageDocument(doc)
 		t.dirty = false
-	}
-	if err != nil {
-		t.degraded = true
-		t.lastError = sanitizeError(err)
-		return nil
 	}
 	t.degraded = false
 	t.lastError = ""

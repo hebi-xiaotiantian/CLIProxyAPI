@@ -213,23 +213,27 @@ func TestUsageTrackerInitialConfigureMergesDiskAndMemory(t *testing.T) {
 	assertAccountUsage(t, persisted.Accounts["auth-memory"], got.Accounts["auth-memory"])
 }
 
-func TestUsageTrackerInitialConfigurePreservesMemoryAfterCorruptLoad(t *testing.T) {
+func TestUsageTrackerInitialConfigureDropsMemoryAfterCorruptLoad(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, usageFileName), []byte("{not-json"), 0o600); err != nil {
+	path := filepath.Join(dir, usageFileName)
+	corrupt := []byte("{not-json")
+	if err := os.WriteFile(path, corrupt, 0o600); err != nil {
 		t.Fatalf("write corrupt usage: %v", err)
 	}
 	tracker := newUsageTracker(time.Now, time.Hour)
+	t.Cleanup(func() {
+		_ = tracker.shutdown()
+	})
 	tracker.observe(usageRecord("auth-memory", 3, 5))
 
 	if err := tracker.configureStore(newStateStore(dir)); err != nil {
 		t.Fatalf("configure corrupt store: %v", err)
 	}
-	got := tracker.snapshot().Accounts["auth-memory"]
-	if got.Requests != 1 || got.TotalTokens != 8 {
-		t.Fatalf("pre-config usage was not retained: %#v", got)
+	if got := tracker.snapshot(); len(got.Accounts) != 0 {
+		t.Fatalf("snapshot accounts = %#v, want empty", got.Accounts)
 	}
-	if !tracker.isDirty() {
-		t.Fatal("corrupt load cleared pre-config dirty usage")
+	if tracker.isDirty() {
+		t.Fatal("corrupt load retained dirty pre-config usage")
 	}
 	degraded, message := tracker.health()
 	if !degraded || message == "" {
@@ -239,12 +243,12 @@ func TestUsageTrackerInitialConfigurePreservesMemoryAfterCorruptLoad(t *testing.
 	if err := tracker.shutdown(); err != nil {
 		t.Fatalf("shutdown usage tracker: %v", err)
 	}
-	persisted, err := newStateStore(dir).loadUsage()
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("load repaired usage: %v", err)
+		t.Fatalf("read corrupt usage: %v", err)
 	}
-	if persisted.Accounts["auth-memory"].TotalTokens != 8 {
-		t.Fatalf("persisted usage = %#v", persisted)
+	if string(raw) != string(corrupt) {
+		t.Fatalf("corrupt usage was overwritten: %q", raw)
 	}
 }
 
