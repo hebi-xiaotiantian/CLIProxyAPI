@@ -55,9 +55,28 @@ plugins:
       unknown_reserve_default: 10
 ```
 
-Use an absolute `state_dir` in production. `policy.json` and `quota.json` are written with mode `0600`. They never contain OAuth tokens or raw credential JSON.
+Use an absolute `state_dir` in production. `policy.json`, `quota.json`, and
+`usage.json` are written with mode `0600`. They never contain OAuth tokens, raw
+credential JSON, request bodies, or response bodies.
 
 Quota windows are presence-aware. A weekly-only primary window, which can occur on Free accounts, is shown and evaluated as weekly quota; an absent five-hour or weekly window is displayed as `--` and does not receive an invented percentage.
+
+## Token Usage
+
+The account table displays cumulative token usage observed by this CLIProxyAPI
+instance for each Codex `AuthID`. It includes input, output, reasoning,
+cache-read, cache-creation, total token, request, and failed-request counters.
+Reasoning tokens remain a subset of output tokens, and cache tokens remain a
+subset of input tokens, so neither is added again to the displayed total.
+
+Usage is aggregated in memory and saved atomically to `usage.json` at most once
+per second. The final dirty snapshot is flushed during plugin shutdown and
+before switching `state_dir`. These counters are local observations, not the
+account's global OpenAI or ChatGPT subscription usage, and they never affect
+priority, weight, eligibility, reserves, or route selection.
+
+The browser refreshes account data every five seconds while visible. Polling
+preserves unsaved policy edits and pauses when the page is hidden.
 
 The browser resource is exposed at:
 
