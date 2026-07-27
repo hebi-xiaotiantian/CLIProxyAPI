@@ -224,9 +224,23 @@ func TestManagementUpdatesCustomPlanOrderWithoutChangingProfile(t *testing.T) {
 
 func TestManagementAccountsResponseContainsNoCredentialJSON(t *testing.T) {
 	plugin := newTestPlugin(t)
-	plugin.inventory = []pluginapi.HostAuthFileEntry{{
-		ID: "auth-a", AuthIndex: "index-a", Provider: "codex", Email: "user@example.com",
+	host := &fakeHostCaller{results: map[string]json.RawMessage{
+		pluginabi.MethodHostAuthList: mustJSON(t, map[string]any{
+			"files": []map[string]any{{
+				"id":            "visible-auth-a",
+				"auth_index":    "sensitive-auth-index-sentinel",
+				"name":          "credential-file.json",
+				"provider":      "codex",
+				"label":         "Visible Account",
+				"email":         "visible@example.com",
+				"path":          "/sensitive/path/sentinel.json",
+				"access_token":  "sensitive-access-token-sentinel",
+				"refresh_token": "sensitive-refresh-token-sentinel",
+				"secret":        "sensitive-secret-sentinel",
+			}},
+		}),
 	}}
+	plugin.host = host
 	response, err := plugin.managementResponse(managementRequest{
 		Method: "GET",
 		Path:   "/v0/management/codex-account-pool/accounts",
@@ -235,11 +249,45 @@ func TestManagementAccountsResponseContainsNoCredentialJSON(t *testing.T) {
 		t.Fatalf("managementResponse() error = %v", err)
 	}
 	text := strings.ToLower(string(response.Body))
-	if strings.Contains(text, "access_token") || strings.Contains(text, "refresh_token") {
-		t.Fatalf("accounts response contains credential data: %s", text)
+	for _, public := range []string{"visible-auth-a", "visible account", "visible@example.com"} {
+		if !strings.Contains(text, public) {
+			t.Fatalf("accounts response is missing public field %q: %s", public, text)
+		}
+	}
+	for _, sensitive := range []string{
+		"auth_index",
+		"sensitive-auth-index-sentinel",
+		"access_token",
+		"sensitive-access-token-sentinel",
+		"refresh_token",
+		"sensitive-refresh-token-sentinel",
+		`"secret"`,
+		"sensitive-secret-sentinel",
+		`"path"`,
+		"/sensitive/path/sentinel.json",
+	} {
+		if strings.Contains(text, sensitive) {
+			t.Fatalf("accounts response contains sensitive sentinel %q: %s", sensitive, text)
+		}
 	}
 	if response.Headers.Get("Cache-Control") != "no-store" {
 		t.Fatalf("Cache-Control = %q, want no-store", response.Headers.Get("Cache-Control"))
+	}
+
+	host.mu.Lock()
+	calls := append([]string(nil), host.calls...)
+	host.mu.Unlock()
+	sawAuthList := false
+	for _, method := range calls {
+		if method == pluginabi.MethodHostAuthGet {
+			t.Fatalf("host calls include %q: %#v", pluginabi.MethodHostAuthGet, calls)
+		}
+		if method == pluginabi.MethodHostAuthList {
+			sawAuthList = true
+		}
+	}
+	if !sawAuthList {
+		t.Fatalf("host calls = %#v, want %q", calls, pluginabi.MethodHostAuthList)
 	}
 }
 
