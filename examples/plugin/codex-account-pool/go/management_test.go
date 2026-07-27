@@ -243,6 +243,145 @@ func TestManagementAccountsResponseContainsNoCredentialJSON(t *testing.T) {
 	}
 }
 
+func TestManagementAccountsIncludeUsageOnlyForVisibleObservedAccounts(t *testing.T) {
+	plugin := newTestPlugin(t)
+	plugin.host = &fakeHostCaller{results: map[string]json.RawMessage{
+		pluginabi.MethodHostAuthList: mustJSON(t, authListResponse{
+			Files: []pluginapi.HostAuthFileEntry{
+				{ID: "auth-a", AuthIndex: "index-a", Provider: "codex", Email: "a@example.com"},
+				{ID: "auth-b", AuthIndex: "index-b", Provider: "codex", Email: "b@example.com"},
+			},
+		}),
+	}}
+	plugin.usage.observe(pluginapi.UsageRecord{
+		Provider: "codex",
+		AuthID:   "auth-a",
+		Failed:   true,
+		Detail: pluginapi.UsageDetail{
+			InputTokens:         100,
+			OutputTokens:        25,
+			ReasoningTokens:     10,
+			CacheReadTokens:     30,
+			CacheCreationTokens: 5,
+		},
+	})
+	plugin.usage.observe(pluginapi.UsageRecord{
+		Provider: "codex",
+		AuthID:   "temporarily-absent",
+		Detail:   pluginapi.UsageDetail{TotalTokens: 999},
+	})
+
+	response, err := plugin.managementResponse(managementRequest{
+		Method: http.MethodGet,
+		Path:   "/v0/management/codex-account-pool/accounts",
+	})
+	if err != nil {
+		t.Fatalf("managementResponse() error = %v", err)
+	}
+	if response.Headers.Get("Cache-Control") != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", response.Headers.Get("Cache-Control"))
+	}
+	if strings.Contains(string(response.Body), "temporarily-absent") {
+		t.Fatalf("accounts response contains absent account usage: %s", response.Body)
+	}
+
+	var body struct {
+		Accounts []accountView `json:"accounts"`
+	}
+	if errUnmarshal := json.Unmarshal(response.Body, &body); errUnmarshal != nil {
+		t.Fatalf("unmarshal accounts response: %v", errUnmarshal)
+	}
+	if len(body.Accounts) != 2 {
+		t.Fatalf("accounts length = %d, want 2", len(body.Accounts))
+	}
+	byID := make(map[string]accountView, len(body.Accounts))
+	for _, account := range body.Accounts {
+		byID[account.ID] = account
+	}
+	authA := byID["auth-a"]
+	if authA.Usage == nil {
+		t.Fatal("auth-a usage = nil")
+	}
+	if authA.Usage.Requests != 1 ||
+		authA.Usage.FailedRequests != 1 ||
+		authA.Usage.InputTokens != 100 ||
+		authA.Usage.OutputTokens != 25 ||
+		authA.Usage.ReasoningTokens != 10 ||
+		authA.Usage.CacheTokens != 35 ||
+		authA.Usage.TotalTokens != 125 ||
+		authA.Usage.UpdatedAt.IsZero() {
+		t.Fatalf("auth-a usage = %#v", authA.Usage)
+	}
+	if authB := byID["auth-b"]; authB.Usage != nil {
+		t.Fatalf("auth-b usage = %#v, want nil", authB.Usage)
+	}
+
+	var rawBody struct {
+		Accounts []map[string]json.RawMessage `json:"accounts"`
+	}
+	if errUnmarshal := json.Unmarshal(response.Body, &rawBody); errUnmarshal != nil {
+		t.Fatalf("unmarshal raw accounts response: %v", errUnmarshal)
+	}
+	for _, account := range rawBody.Accounts {
+		var id string
+		if errUnmarshal := json.Unmarshal(account["id"], &id); errUnmarshal != nil {
+			t.Fatalf("unmarshal account id: %v", errUnmarshal)
+		}
+		if id == "auth-b" {
+			if _, exists := account["usage"]; exists {
+				t.Fatalf("auth-b JSON contains usage: %s", response.Body)
+			}
+			return
+		}
+	}
+	t.Fatal("auth-b missing from accounts response")
+}
+
+func TestManagementStatusReportsSanitizedUsagePersistenceHealth(t *testing.T) {
+	plugin := newTestPlugin(t)
+	plugin.usage.persistenceMu.Lock()
+	originalSave := plugin.usage.save
+	plugin.usage.save = func(*stateStore, UsageDocument) error {
+		return fmt.Errorf("persist failed: access_token=secret-value")
+	}
+	plugin.usage.persistenceMu.Unlock()
+	t.Cleanup(func() {
+		plugin.usage.persistenceMu.Lock()
+		plugin.usage.save = originalSave
+		plugin.usage.persistenceMu.Unlock()
+	})
+
+	plugin.usage.observe(pluginapi.UsageRecord{
+		Provider: "codex",
+		AuthID:   "auth-a",
+		Detail:   pluginapi.UsageDetail{TotalTokens: 1},
+	})
+	if errFlush := plugin.usage.flush(); errFlush == nil {
+		t.Fatal("flush() error = nil, want persistence failure")
+	}
+	status := plugin.statusView()
+	if got, ok := status["usage_degraded"].(bool); !ok || !got {
+		t.Fatalf("usage_degraded = %#v, want true", status["usage_degraded"])
+	}
+	usageError, ok := status["usage_error"].(string)
+	if !ok || usageError == "" {
+		t.Fatalf("usage_error = %#v, want non-empty string", status["usage_error"])
+	}
+	if strings.Contains(usageError, "secret-value") {
+		t.Fatalf("usage_error contains secret: %q", usageError)
+	}
+	if !strings.Contains(usageError, "[redacted]") {
+		t.Fatalf("usage_error = %q, want redaction marker", usageError)
+	}
+
+	plugin.usage.persistenceMu.Lock()
+	plugin.usage.save = originalSave
+	plugin.usage.persistenceMu.Unlock()
+	if errFlush := plugin.usage.flush(); errFlush != nil {
+		t.Fatalf("flush() after restoring save = %v", errFlush)
+	}
+}
+
 func TestStatusViewReportsPluginVersion(t *testing.T) {
 	plugin := newTestPlugin(t)
 	if got := plugin.statusView()["version"]; got != "0.2.0" {

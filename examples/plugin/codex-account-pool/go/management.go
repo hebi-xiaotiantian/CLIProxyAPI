@@ -66,26 +66,38 @@ type accountPatchRequest struct {
 	Updates []accountUpdate    `json:"updates,omitempty"`
 }
 
+type accountUsageView struct {
+	Requests        int64     `json:"requests"`
+	FailedRequests  int64     `json:"failed_requests"`
+	InputTokens     int64     `json:"input_tokens"`
+	OutputTokens    int64     `json:"output_tokens"`
+	ReasoningTokens int64     `json:"reasoning_tokens"`
+	CacheTokens     int64     `json:"cache_tokens"`
+	TotalTokens     int64     `json:"total_tokens"`
+	UpdatedAt       time.Time `json:"updated_at,omitempty"`
+}
+
 type accountView struct {
-	ID                string        `json:"id"`
-	Label             string        `json:"label,omitempty"`
-	Email             string        `json:"email,omitempty"`
-	Status            string        `json:"status,omitempty"`
-	StatusMessage     string        `json:"status_message,omitempty"`
-	HostDisabled      bool          `json:"host_disabled"`
-	HostUnavailable   bool          `json:"host_unavailable"`
-	Plan              PlanKind      `json:"plan"`
-	PlanType          string        `json:"plan_type,omitempty"`
-	FiveHourRemaining int           `json:"five_hour_remaining"`
-	WeeklyRemaining   int           `json:"weekly_remaining"`
-	FiveHourPresent   bool          `json:"five_hour_window_present"`
-	WeeklyPresent     bool          `json:"weekly_window_present"`
-	FiveHourResetAt   time.Time     `json:"five_hour_reset_at,omitempty"`
-	WeeklyResetAt     time.Time     `json:"weekly_reset_at,omitempty"`
-	QuotaRefreshedAt  time.Time     `json:"quota_refreshed_at,omitempty"`
-	QuotaFresh        bool          `json:"quota_fresh"`
-	Refresh           RefreshStatus `json:"refresh,omitempty"`
-	Policy            AccountPolicy `json:"policy"`
+	ID                string            `json:"id"`
+	Label             string            `json:"label,omitempty"`
+	Email             string            `json:"email,omitempty"`
+	Status            string            `json:"status,omitempty"`
+	StatusMessage     string            `json:"status_message,omitempty"`
+	HostDisabled      bool              `json:"host_disabled"`
+	HostUnavailable   bool              `json:"host_unavailable"`
+	Plan              PlanKind          `json:"plan"`
+	PlanType          string            `json:"plan_type,omitempty"`
+	FiveHourRemaining int               `json:"five_hour_remaining"`
+	WeeklyRemaining   int               `json:"weekly_remaining"`
+	FiveHourPresent   bool              `json:"five_hour_window_present"`
+	WeeklyPresent     bool              `json:"weekly_window_present"`
+	FiveHourResetAt   time.Time         `json:"five_hour_reset_at,omitempty"`
+	WeeklyResetAt     time.Time         `json:"weekly_reset_at,omitempty"`
+	QuotaRefreshedAt  time.Time         `json:"quota_refreshed_at,omitempty"`
+	QuotaFresh        bool              `json:"quota_fresh"`
+	Refresh           RefreshStatus     `json:"refresh,omitempty"`
+	Policy            AccountPolicy     `json:"policy"`
+	Usage             *accountUsageView `json:"usage,omitempty"`
 }
 
 type previewCandidateView struct {
@@ -267,6 +279,7 @@ func (p *accountPoolPlugin) accountViews() []accountView {
 	accounts := p.inventorySnapshot()
 	policy := p.policy.Load()
 	quota := p.quota.Load()
+	usage := p.usage.snapshot()
 	p.configMu.RLock()
 	cfg := p.config
 	coordinator := p.coordinator
@@ -290,6 +303,19 @@ func (p *accountPoolPlugin) accountViews() []accountView {
 		if coordinator != nil {
 			refresh.NextRefresh = coordinator.nextRefresh(account.ID)
 		}
+		var usageView *accountUsageView
+		if accountUsage, ok := usage.Accounts[account.ID]; ok {
+			usageView = &accountUsageView{
+				Requests:        accountUsage.Requests,
+				FailedRequests:  accountUsage.FailedRequests,
+				InputTokens:     accountUsage.InputTokens,
+				OutputTokens:    accountUsage.OutputTokens,
+				ReasoningTokens: accountUsage.ReasoningTokens,
+				CacheTokens:     saturatingAdd(accountUsage.CacheReadTokens, accountUsage.CacheCreationTokens),
+				TotalTokens:     accountUsage.TotalTokens,
+				UpdatedAt:       accountUsage.UpdatedAt,
+			}
+		}
 		views = append(views, accountView{
 			ID:                account.ID,
 			Label:             account.Label,
@@ -311,6 +337,7 @@ func (p *accountPoolPlugin) accountViews() []accountView {
 				!snapshot.RefreshedAt.IsZero() && now.Sub(snapshot.RefreshedAt) <= cfg.SnapshotMaxAge,
 			Refresh: refresh,
 			Policy:  accountPolicy,
+			Usage:   usageView,
 		})
 	}
 	sort.Slice(views, func(i, j int) bool {
@@ -723,6 +750,7 @@ func (p *accountPoolPlugin) statusView() map[string]any {
 	p.configMu.RLock()
 	cfg := p.config
 	p.configMu.RUnlock()
+	usageDegraded, usageError := p.usage.health()
 	return map[string]any{
 		"plugin":            pluginID,
 		"version":           pluginVersion,
@@ -733,6 +761,8 @@ func (p *accountPoolPlugin) statusView() map[string]any {
 		"stale_policy":      cfg.StalePolicy,
 		"state_error":       p.getStatusError(),
 		"policy_degraded":   p.isPolicyDegraded(),
+		"usage_degraded":    usageDegraded,
+		"usage_error":       usageError,
 	}
 }
 
