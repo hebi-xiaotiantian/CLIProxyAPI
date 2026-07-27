@@ -600,6 +600,7 @@
     let refreshRequestGeneration = 0;
     let latestSuccessfulRefreshRequest = 0;
     let accountRequestSequence = 0;
+    let activeRefreshPollGeneration = 0;
     let accountPollTimer = 0;
 
     const $ = id => document.getElementById(id);
@@ -886,10 +887,19 @@
       return true;
     }
 
+    function finishRefreshPolling(generation) {
+      if (activeRefreshPollGeneration !== generation) return false;
+      activeRefreshPollGeneration = 0;
+      scheduleAccountPolling();
+      return true;
+    }
+
     function scheduleAccountPolling() {
       clearTimeout(accountPollTimer);
-      if (document.hidden || !managementKey) return;
+      accountPollTimer = 0;
+      if (document.hidden || !managementKey || activeRefreshPollGeneration !== 0) return;
       accountPollTimer = setTimeout(async () => {
+        accountPollTimer = 0;
         await refreshAccounts();
         scheduleAccountPolling();
       }, 5000);
@@ -940,13 +950,21 @@
     }
 
     async function pollRefreshStatus(generation, attempt = 0) {
-      if (generation !== refreshPollGeneration) return;
+      if (generation !== refreshPollGeneration || document.hidden) {
+        finishRefreshPolling(generation);
+        return;
+      }
       const loaded = await refreshAccounts(generation);
-      if (!loaded) return;
+      if (!loaded) {
+        finishRefreshPolling(generation);
+        return;
+      }
       const active = accounts.some(account => ["queued", "refreshing"].includes(account.refresh?.state));
       if (active && attempt < 59) {
         setTimeout(() => pollRefreshStatus(generation, attempt + 1).catch(showError), 2000);
+        return;
       }
+      finishRefreshPolling(generation);
     }
 
     async function refresh(ids = []) {
@@ -960,6 +978,9 @@
       if (requestGeneration < latestSuccessfulRefreshRequest) return;
       latestSuccessfulRefreshRequest = requestGeneration;
       const generation = ++refreshPollGeneration;
+      clearTimeout(accountPollTimer);
+      accountPollTimer = 0;
+      activeRefreshPollGeneration = generation;
       $("connectionStatus").textContent = "额度刷新已排队";
       await pollRefreshStatus(generation);
     }
@@ -1091,7 +1112,8 @@
 
     document.addEventListener("visibilitychange", () => {
       clearTimeout(accountPollTimer);
-      if (!document.hidden && managementKey) {
+      accountPollTimer = 0;
+      if (!document.hidden && managementKey && activeRefreshPollGeneration === 0) {
         refreshAccounts().finally(scheduleAccountPolling);
       }
     });

@@ -803,6 +803,12 @@ func TestStaticResourceIncludesUsageDisplayAndPollingControls(t *testing.T) {
 		"applyAccountsResponse",
 		"request.sequence === accountRequestSequence",
 		"request.generation === null || request.generation === refreshPollGeneration",
+		"activeRefreshPollGeneration",
+		"finishRefreshPolling",
+		"activeRefreshPollGeneration = generation",
+		"activeRefreshPollGeneration !== generation",
+		"document.hidden || !managementKey || activeRefreshPollGeneration !== 0",
+		"!document.hidden && managementKey && activeRefreshPollGeneration === 0",
 		"5000",
 	} {
 		if !strings.Contains(text, required) {
@@ -814,6 +820,9 @@ func TestStaticResourceIncludesUsageDisplayAndPollingControls(t *testing.T) {
 	}
 	if count := strings.Count(text, "accounts = accountData.accounts || [];"); count != 1 {
 		t.Fatalf("direct accounts assignment count = %d, want one guarded assignment", count)
+	}
+	if count := strings.Count(text, "finishRefreshPolling(generation)"); count < 4 {
+		t.Fatalf("finishRefreshPolling(generation) count = %d, want all polling exit paths guarded", count)
 	}
 	if count := strings.Count(text, "pending.clear()"); count != 1 {
 		t.Fatalf("pending.clear() count = %d, want 1 only after a successful apply", count)
