@@ -21,6 +21,7 @@ type usageTracker struct {
 	revision        uint64
 	degraded        bool
 	lastError       string
+	loadBlocked     bool
 	stopped         bool
 	shutdownStarted bool
 	shutdownErr     error
@@ -140,16 +141,25 @@ func (t *usageTracker) configureStore(store *stateStore) error {
 	if t.stopped {
 		return fmt.Errorf("usage tracker is shut down")
 	}
-	if t.store != nil && t.store.dir == store.dir {
+	sameStore := t.store != nil && t.store.dir == store.dir
+	if sameStore && !t.loadBlocked {
 		return nil
 	}
+	if t.loadBlocked && t.dirty && !sameStore {
+		message := t.lastError
+		if message == "" {
+			message = "usage state could not be loaded"
+		}
+		return fmt.Errorf("switch usage state directory while load is blocked: %s", message)
+	}
 	initialConfigure := t.store == nil
-	preConfigDirty := initialConfigure && t.dirty
+	retryingBlockedLoad := sameStore && t.loadBlocked
+	preConfigDirty := (initialConfigure || retryingBlockedLoad) && t.dirty
 	preConfigDoc := defaultUsageDocument()
 	if preConfigDirty {
 		preConfigDoc = cloneUsageDocument(t.doc)
 	}
-	if t.store != nil && t.dirty {
+	if t.store != nil && t.dirty && !sameStore {
 		if err := t.save(t.store, cloneUsageDocument(t.doc)); err != nil {
 			message := sanitizeError(err)
 			t.degraded = true
@@ -163,8 +173,11 @@ func (t *usageTracker) configureStore(store *stateStore) error {
 	t.store = store
 	t.revision++
 	if err != nil {
-		t.doc = defaultUsageDocument()
-		t.dirty = false
+		if !retryingBlockedLoad {
+			t.doc = defaultUsageDocument()
+			t.dirty = false
+		}
+		t.loadBlocked = true
 		t.degraded = true
 		t.lastError = sanitizeError(err)
 		return nil
@@ -177,6 +190,7 @@ func (t *usageTracker) configureStore(store *stateStore) error {
 		t.doc = cloneUsageDocument(doc)
 		t.dirty = false
 	}
+	t.loadBlocked = false
 	t.degraded = false
 	t.lastError = ""
 	return nil
@@ -263,6 +277,16 @@ func (t *usageTracker) flush() error {
 	if !t.dirty {
 		t.mu.Unlock()
 		return nil
+	}
+	if t.loadBlocked {
+		message := t.lastError
+		if message == "" {
+			message = "usage state could not be loaded"
+			t.lastError = message
+		}
+		t.degraded = true
+		t.mu.Unlock()
+		return fmt.Errorf("save usage blocked after load failure: %s", message)
 	}
 	if t.store == nil {
 		message := sanitizeError(fmt.Errorf("usage state store is unavailable"))

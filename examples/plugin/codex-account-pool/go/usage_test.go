@@ -537,34 +537,256 @@ func TestUsageTrackerRejectsSwitchWhenOldFlushFails(t *testing.T) {
 	}
 }
 
-func TestUsageTrackerCorruptUsageStartsDegradedWithoutOverwrite(t *testing.T) {
+func TestUsageTrackerLoadBlockedDoesNotOverwriteUsage(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  []byte
+	}{
+		{
+			name: "corrupt",
+			raw:  []byte(`{"access_token":"supersecret"`),
+		},
+		{
+			name: "unsupported version",
+			raw:  []byte(`{"version":2,"accounts":{"auth-history":{"requests":9}}}`),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, usageFileName)
+			if err := os.WriteFile(path, tt.raw, 0o600); err != nil {
+				t.Fatalf("write invalid usage: %v", err)
+			}
+
+			tracker := newUsageTracker(time.Now, time.Hour)
+			var saves atomic.Int64
+			tracker.save = func(store *stateStore, doc UsageDocument) error {
+				saves.Add(1)
+				return store.saveUsage(doc)
+			}
+			if err := tracker.configureStore(newStateStore(dir)); err != nil {
+				t.Fatalf("configure invalid store: %v", err)
+			}
+			tracker.observe(usageRecord("auth-memory", 3, 5))
+
+			errFlush := tracker.flush()
+			if errFlush == nil {
+				t.Fatal("flush succeeded while usage load was blocked")
+			}
+			if strings.Contains(errFlush.Error(), "supersecret") {
+				t.Fatalf("flush error leaked file content: %v", errFlush)
+			}
+			assertFileBytes(t, path, tt.raw)
+			degraded, message := tracker.health()
+			if !degraded || message == "" {
+				t.Fatalf("health after flush = (%v, %q), want degraded with message", degraded, message)
+			}
+			if !tracker.isDirty() {
+				t.Fatal("blocked flush cleared dirty usage")
+			}
+
+			errShutdown := tracker.shutdown()
+			if errShutdown == nil {
+				t.Fatal("shutdown succeeded while usage load was blocked")
+			}
+			if strings.Contains(errShutdown.Error(), "supersecret") {
+				t.Fatalf("shutdown error leaked file content: %v", errShutdown)
+			}
+			assertFileBytes(t, path, tt.raw)
+			degraded, message = tracker.health()
+			if !degraded || message == "" {
+				t.Fatalf("health after shutdown = (%v, %q), want degraded with message", degraded, message)
+			}
+			if got := saves.Load(); got != 0 {
+				t.Fatalf("save attempts = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestUsageTrackerReconfigureRepairsLoadBlockedStore(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, usageFileName)
-	corrupt := []byte("{not-json")
-	if err := os.WriteFile(path, corrupt, 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("{not-json"), 0o600); err != nil {
 		t.Fatalf("write corrupt usage: %v", err)
 	}
-
-	tracker := newUsageTracker(time.Now, 20*time.Millisecond)
-	if err := tracker.configureStore(newStateStore(dir)); err != nil {
+	now := time.Date(2026, time.July, 27, 20, 0, 0, 0, time.UTC)
+	tracker := newUsageTracker(func() time.Time { return now }, time.Hour)
+	t.Cleanup(func() {
+		if err := tracker.shutdown(); err != nil {
+			t.Fatalf("shutdown usage tracker: %v", err)
+		}
+	})
+	store := newStateStore(dir)
+	if err := tracker.configureStore(store); err != nil {
 		t.Fatalf("configure corrupt store: %v", err)
 	}
-	if got := tracker.snapshot(); len(got.Accounts) != 0 {
-		t.Fatalf("snapshot accounts = %#v, want empty", got.Accounts)
+	tracker.observe(pluginapi.UsageRecord{
+		Provider: "codex",
+		AuthID:   "auth-a",
+		Failed:   true,
+		Detail: pluginapi.UsageDetail{
+			InputTokens:         10,
+			OutputTokens:        10,
+			ReasoningTokens:     10,
+			CacheReadTokens:     10,
+			CacheCreationTokens: 10,
+			TotalTokens:         10,
+		},
+	})
+	tracker.observe(usageRecord("auth-memory", 3, 5))
+
+	diskTime := now.Add(-time.Hour)
+	if err := store.saveUsage(UsageDocument{
+		Version: stateVersion,
+		Accounts: map[string]AccountUsage{
+			"auth-a": {
+				Requests:            math.MaxInt64,
+				FailedRequests:      math.MaxInt64,
+				InputTokens:         math.MaxInt64 - 5,
+				OutputTokens:        math.MaxInt64 - 5,
+				ReasoningTokens:     math.MaxInt64 - 5,
+				CacheReadTokens:     math.MaxInt64 - 5,
+				CacheCreationTokens: math.MaxInt64 - 5,
+				TotalTokens:         math.MaxInt64 - 5,
+				UpdatedAt:           diskTime,
+			},
+			"auth-disk": {Requests: 4, TotalTokens: 40, UpdatedAt: diskTime},
+		},
+	}); err != nil {
+		t.Fatalf("repair usage: %v", err)
+	}
+
+	if err := tracker.configureStore(newStateStore(filepath.Join(dir, "."))); err != nil {
+		t.Fatalf("reconfigure repaired store: %v", err)
+	}
+	got := tracker.snapshot()
+	assertAccountUsage(t, got.Accounts["auth-a"], AccountUsage{
+		Requests:            math.MaxInt64,
+		FailedRequests:      math.MaxInt64,
+		InputTokens:         math.MaxInt64,
+		OutputTokens:        math.MaxInt64,
+		ReasoningTokens:     math.MaxInt64,
+		CacheReadTokens:     math.MaxInt64,
+		CacheCreationTokens: math.MaxInt64,
+		TotalTokens:         math.MaxInt64,
+		UpdatedAt:           now,
+	})
+	assertAccountUsage(t, got.Accounts["auth-memory"], AccountUsage{
+		Requests:     1,
+		InputTokens:  3,
+		OutputTokens: 5,
+		TotalTokens:  8,
+		UpdatedAt:    now,
+	})
+	assertAccountUsage(t, got.Accounts["auth-disk"], AccountUsage{
+		Requests:    4,
+		TotalTokens: 40,
+		UpdatedAt:   diskTime,
+	})
+	degraded, message := tracker.health()
+	if degraded || message != "" {
+		t.Fatalf("health after repair = (%v, %q), want healthy", degraded, message)
+	}
+	if !tracker.isDirty() {
+		t.Fatal("reconfigure cleared merged usage")
+	}
+
+	if err := tracker.flush(); err != nil {
+		t.Fatalf("flush repaired usage: %v", err)
+	}
+	persisted, err := store.loadUsage()
+	if err != nil {
+		t.Fatalf("load repaired usage: %v", err)
+	}
+	assertAccountUsage(t, persisted.Accounts["auth-a"], got.Accounts["auth-a"])
+	assertAccountUsage(t, persisted.Accounts["auth-memory"], got.Accounts["auth-memory"])
+	assertAccountUsage(t, persisted.Accounts["auth-disk"], got.Accounts["auth-disk"])
+}
+
+func TestUsageTrackerRejectsSwitchWhileLoadBlockedAndDirty(t *testing.T) {
+	oldDir := t.TempDir()
+	oldPath := filepath.Join(oldDir, usageFileName)
+	corrupt := []byte(`{"refresh_token":"topsecret"`)
+	if err := os.WriteFile(oldPath, corrupt, 0o600); err != nil {
+		t.Fatalf("write corrupt usage: %v", err)
+	}
+	newStore := newStateStore(t.TempDir())
+	if err := newStore.saveUsage(UsageDocument{
+		Version: stateVersion,
+		Accounts: map[string]AccountUsage{
+			"auth-new": {Requests: 7, TotalTokens: 77},
+		},
+	}); err != nil {
+		t.Fatalf("seed new store: %v", err)
+	}
+
+	tracker := newUsageTracker(time.Now, time.Hour)
+	t.Cleanup(func() {
+		_ = tracker.shutdown()
+	})
+	oldStore := newStateStore(oldDir)
+	if err := tracker.configureStore(oldStore); err != nil {
+		t.Fatalf("configure corrupt store: %v", err)
+	}
+	tracker.observe(usageRecord("auth-memory", 3, 5))
+
+	err := tracker.configureStore(newStore)
+	if err == nil {
+		t.Fatal("switch store succeeded while usage load was blocked and dirty")
+	}
+	if strings.Contains(err.Error(), "topsecret") {
+		t.Fatalf("switch error leaked file content: %v", err)
+	}
+	if tracker.store.dir != oldStore.dir {
+		t.Fatalf("usage store switched to %q, want %q", tracker.store.dir, oldStore.dir)
+	}
+	if got := tracker.snapshot().Accounts["auth-memory"]; got.Requests != 1 || got.TotalTokens != 8 {
+		t.Fatalf("in-memory usage was not retained: %#v", got)
 	}
 	degraded, message := tracker.health()
 	if !degraded || message == "" {
 		t.Fatalf("health = (%v, %q), want degraded with message", degraded, message)
 	}
-	if err := tracker.shutdown(); err != nil {
-		t.Fatalf("shutdown usage tracker: %v", err)
+	assertFileBytes(t, oldPath, corrupt)
+}
+
+func TestUsageTrackerAllowsSwitchWhileLoadBlockedAndClean(t *testing.T) {
+	oldDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(oldDir, usageFileName), []byte("{not-json"), 0o600); err != nil {
+		t.Fatalf("write corrupt usage: %v", err)
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read corrupt usage: %v", err)
+	newStore := newStateStore(t.TempDir())
+	if err := newStore.saveUsage(UsageDocument{
+		Version: stateVersion,
+		Accounts: map[string]AccountUsage{
+			"auth-new": {Requests: 7, TotalTokens: 77},
+		},
+	}); err != nil {
+		t.Fatalf("seed new store: %v", err)
 	}
-	if string(raw) != string(corrupt) {
-		t.Fatalf("corrupt usage was overwritten: %q", raw)
+
+	tracker := newUsageTracker(time.Now, time.Hour)
+	t.Cleanup(func() {
+		if err := tracker.shutdown(); err != nil {
+			t.Fatalf("shutdown usage tracker: %v", err)
+		}
+	})
+	if err := tracker.configureStore(newStateStore(oldDir)); err != nil {
+		t.Fatalf("configure corrupt store: %v", err)
+	}
+	if err := tracker.configureStore(newStore); err != nil {
+		t.Fatalf("switch clean blocked store: %v", err)
+	}
+
+	got := tracker.snapshot()
+	if len(got.Accounts) != 1 || got.Accounts["auth-new"].Requests != 7 {
+		t.Fatalf("new store was not loaded: %#v", got)
+	}
+	degraded, message := tracker.health()
+	if degraded || message != "" {
+		t.Fatalf("health after switch = (%v, %q), want healthy", degraded, message)
 	}
 }
 
@@ -679,6 +901,17 @@ func assertAccountUsage(t *testing.T, got, want AccountUsage) {
 	t.Helper()
 	if got != want {
 		t.Fatalf("account usage = %#v, want %#v", got, want)
+	}
+}
+
+func assertFileBytes(t *testing.T, path string, want []byte) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("file %s = %q, want %q", path, got, want)
 	}
 }
 
