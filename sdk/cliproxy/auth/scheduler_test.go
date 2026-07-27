@@ -840,6 +840,37 @@ func TestManagerPluginSchedulerFallsBackWhenUnhandledOrUnknown(t *testing.T) {
 	}
 }
 
+func TestManagerPluginSchedulerReceivesAllAvailablePriorities(t *testing.T) {
+	manager := NewManager(nil, &FillFirstSelector{}, nil)
+	manager.executors["gemini"] = schedulerTestExecutor{}
+	for _, auth := range []*Auth{
+		{ID: "high", Provider: "gemini", Attributes: map[string]string{"priority": "100"}},
+		{ID: "low", Provider: "gemini", Attributes: map[string]string{"priority": "10"}},
+	} {
+		if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+			t.Fatalf("Register(%s) error = %v", auth.ID, errRegister)
+		}
+	}
+	scheduler := &fakePluginScheduler{
+		handled: true,
+		pick: func(_ context.Context, req pluginapi.SchedulerPickRequest) (pluginapi.SchedulerPickResponse, bool, error) {
+			if len(req.Candidates) != 2 {
+				t.Fatalf("len(req.Candidates) = %d, want 2", len(req.Candidates))
+			}
+			return pluginapi.SchedulerPickResponse{Handled: true, AuthID: "low"}, true, nil
+		},
+	}
+	manager.SetPluginScheduler(scheduler)
+
+	got, _, errPick := manager.pickNext(context.Background(), "gemini", "", cliproxyexecutor.Options{}, nil)
+	if errPick != nil {
+		t.Fatalf("pickNext() error = %v", errPick)
+	}
+	if got == nil || got.ID != "low" {
+		t.Fatalf("pickNext() auth = %#v, want low", got)
+	}
+}
+
 func TestManagerPluginSchedulerDelegatesBuiltin(t *testing.T) {
 	t.Run("round-robin", func(t *testing.T) {
 		manager := NewManager(nil, &FillFirstSelector{}, nil)

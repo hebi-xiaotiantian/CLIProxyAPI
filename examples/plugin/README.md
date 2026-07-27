@@ -91,6 +91,32 @@ plugins:
 
 `auth_id` selects a matching candidate when `delegate` is empty. `delegate` accepts `""`, `fill-first`, or `round-robin`; other non-empty values leave the pick unhandled. `deny` returns a scheduler error.
 
+## Codex Account Pool
+
+`codex-account-pool` combines Scheduler, UsagePlugin, Management API, and a browser resource to manage Codex account priority, weight, backup status, route profiles, and five-hour/weekly quota snapshots from one page.
+
+```yaml
+plugins:
+  configs:
+    codex-account-pool:
+      enabled: true
+      priority: 100
+      state_dir: /opt/cli-proxy/state/codex-account-pool
+      refresh_interval: 10m
+      refresh_concurrency: 3
+      snapshot_max_age: 20m
+      stale_policy: exclude
+      affinity_ttl: 30m
+```
+
+Build only this plugin with:
+
+```bash
+make -C examples/plugin codex-account-pool
+```
+
+See `codex-account-pool/README.md` for routing semantics and deployment guidance.
+
 ## Build All Examples
 
 ```bash

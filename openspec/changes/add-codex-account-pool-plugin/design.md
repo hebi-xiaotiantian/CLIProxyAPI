@@ -56,6 +56,8 @@ Selection uses a tuple instead of adding large numeric offsets:
 
 Keeping dimensions separate guarantees that a backup account cannot preempt a regular account and that a paid account cannot escape a Free-first tier through an unusually high base priority.
 
+The host passes every currently available candidate to the plugin before applying its built-in highest-priority reduction. If the plugin leaves the request unhandled, the host restores the original highest-priority behavior before invoking the built-in selector. This lets the plugin descend to a lower plugin priority after quota filtering without changing non-plugin routing.
+
 The built-in profiles are:
 
 - `paid-first`: paid, Free, unknown;
@@ -67,13 +69,19 @@ The built-in profiles are:
 
 Returning a concrete `AuthID` from Scheduler bypasses the host's built-in selector wrapper. The plugin therefore derives a session key from scheduler headers and metadata, retains bindings for the configured TTL, and accepts a binding only if the account remains in the current strict selection group.
 
+The host-provided metadata path includes explicit execution sessions and stable `derived_session_id` values produced from request context, so requests without a client session header can still retain affinity.
+
 Profile changes publish a new policy revision. Affinity entries include that revision and are lazily invalidated, making profile changes immediately effective without a global blocking cache clear.
+
+Weighted state is discarded when the policy revision changes. Expired or mismatched affinity entries are removed while binding new sessions, and the affinity table has a fixed maximum size with oldest-expiry eviction.
 
 ### 5. Use host callbacks for credentials and HTTP
 
 The refresher obtains account inventory from `host.auth.list`, maps an account to `auth_index`, and reads current credential JSON with `host.auth.get` only while building a refresh request. It extracts `access_token` and `account_id` from supported top-level or nested token fields, builds the Codex headers, invokes `host.http.do`, and discards credential bytes after the call.
 
 The endpoint defaults to `https://chatgpt.com/backend-api/wham/usage` and remains configurable for tests. The parser stores normalized fields only. Missing `plan_type` becomes `unknown`; it is never inferred as Free.
+
+Quota windows are presence-aware. At least one valid window is required, every present window must contain a percentage in the zero-through-one-hundred range, and absent windows are not invented as fully available. A primary window with a weekly duration is normalized into the weekly slot so Free accounts with one weekly-only window remain usable and display correctly.
 
 Alternative: direct `net/http` from the plugin. Rejected because host HTTP callbacks preserve the server's proxy and request-observability policy.
 
@@ -88,7 +96,9 @@ A background coordinator starts after successful plugin configuration and stops 
 - one in-flight refresh per account;
 - delayed deduplicated refresh after Codex HTTP 429 usage records.
 
-Configuration reload replaces coordinator settings without losing valid snapshots. `stale_policy=exclude` is the default; `allow` is an explicit availability-first override.
+The scheduled inventory callback re-reads host auth inventory before each scheduling pass. Configuration reload stops the old coordinator before switching stores or snapshots, preventing an old refresh from writing into the new state directory. `stale_policy=exclude` is the default; `allow` is an explicit availability-first override.
+
+The coordinator rejects new work once stopping begins and keeps an account marked in flight until its refresh result has been applied. Configuration reload also holds the policy and quota mutation locks while loading and publishing the replacement snapshots, preventing concurrent state updates from being overwritten by an older disk read.
 
 ### 7. Serve a static management shell and authenticated JSON routes
 
@@ -104,7 +114,7 @@ The resource `/v0/resource/plugins/codex-account-pool/pool` serves embedded HTML
 
 Plugin routes are exact paths because the host intentionally rejects path parameters and wildcards. Batch targets are supplied in JSON request bodies.
 
-The UI uses a dense table, inline numeric controls, checkboxes, filters, selection, a batch action bar, profile segmented control, refresh actions, and a preview panel. It uses no frontend framework or build-time JavaScript dependency.
+The UI uses a dense table, inline numeric controls, checkboxes, filters, selection, a batch action bar, profile segmented control, custom plan-order selection, refresh actions, and a preview panel. It polls queued and refreshing accounts until they reach a terminal state or a bounded attempt limit. It uses no frontend framework or build-time JavaScript dependency.
 
 ### 8. Build and migration follow server compatibility
 
@@ -121,6 +131,7 @@ The first deployment runs with `stale_policy=allow` until initial snapshots are 
 - `stale_policy=exclude` can stop routing during a prolonged quota outage. -> Expose an explicit `allow` override and clear diagnostics; do not silently bypass policy.
 - Host auth files can change while a refresh runs. -> Resolve the current auth index and credential immediately before each request and never cache tokens.
 - A local plugin build can be incompatible with the deployed binary. -> Build on matching Linux toolchain and deploy the server and plugin from the same tagged fork revision.
+- A native plugin background `host.http.do` callback has no cancellation identifier in the current C ABI. -> Keep refresh concurrency bounded, stop accepting new work before reload, and document that shutdown can wait for an already-established non-cooperative host HTTP call.
 
 ## Migration Plan
 

@@ -1,4 +1,6 @@
-EXAMPLES := simple model auth frontend-auth executor protocol-format request-translator request-normalizer response-translator response-normalizer thinking usage cli management-api host-callback host-callback-auth-files host-model-callback claude-web-search-router
+EXAMPLES := simple model auth frontend-auth executor protocol-format request-translator request-normalizer response-translator response-normalizer thinking usage cli management-api host-callback
+GO_ONLY_EXAMPLES := frontend-auth-exclusive scheduler codex-service-tier host-callback-auth-files host-model-callback claude-web-search-router codex-account-pool
+CODEX_ACCOUNT_POOL_SOURCES := $(wildcard codex-account-pool/go/*.go) codex-account-pool/go/go.mod codex-account-pool/go/go.sum codex-account-pool/go/web/index.html
 LANGUAGES := go c rust
 BIN_DIR := $(CURDIR)/bin
 BUILD_DIR := $(BIN_DIR)/build
@@ -19,12 +21,16 @@ RUST_DYLIB_PREFIX := lib
 RUST_DYLIB_EXT := so
 endif
 
-.PHONY: build list clean
+.PHONY: build codex-account-pool list clean
 
-build: $(foreach example,$(EXAMPLES),$(foreach lang,$(LANGUAGES),$(BIN_DIR)/$(example)-$(lang).$(PLUGIN_EXT)))
+build: $(foreach example,$(EXAMPLES),$(foreach lang,$(LANGUAGES),$(BIN_DIR)/$(example)-$(lang).$(PLUGIN_EXT))) $(foreach example,$(GO_ONLY_EXAMPLES),$(BIN_DIR)/$(example)-go.$(PLUGIN_EXT))
+
+codex-account-pool: $(BIN_DIR)/codex-account-pool-go.$(PLUGIN_EXT)
+
+$(BIN_DIR)/codex-account-pool-go.$(PLUGIN_EXT): $(CODEX_ACCOUNT_POOL_SOURCES)
 
 list:
-	@$(foreach example,$(EXAMPLES),$(foreach lang,$(LANGUAGES),echo $(example)/$(lang);))
+	@$(foreach example,$(EXAMPLES),$(foreach lang,$(LANGUAGES),echo $(example)/$(lang);)) $(foreach example,$(GO_ONLY_EXAMPLES),echo $(example)/go;)
 
 clean:
 	rm -rf $(BIN_DIR)

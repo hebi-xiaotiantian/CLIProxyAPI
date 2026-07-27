@@ -240,19 +240,26 @@ func (m *Manager) SetRoundTripperProvider(p RoundTripperProvider) {
 }
 
 func (m *Manager) availableAuthsForRouteModel(auths []*Auth, provider, routeModel string, now time.Time) ([]*Auth, error) {
+	eligible, errEligible := m.eligibleAuthsForRouteModel(auths, provider, routeModel, now)
+	if errEligible != nil {
+		return nil, errEligible
+	}
+	return highestPriorityAuths(eligible), nil
+}
+
+func (m *Manager) eligibleAuthsForRouteModel(auths []*Auth, provider, routeModel string, now time.Time) ([]*Auth, error) {
 	if len(auths) == 0 {
 		return nil, &Error{Code: "auth_not_found", Message: "no auth candidates"}
 	}
 
-	availableByPriority := make(map[int][]*Auth)
+	eligible := make([]*Auth, 0, len(auths))
 	cooldownCount := 0
 	var earliest time.Time
 	for _, candidate := range auths {
 		checkModel := m.selectionModelForAuth(candidate, routeModel)
 		blocked, reason, next := isAuthBlockedForModel(candidate, checkModel, now)
 		if !blocked {
-			priority := authPriority(candidate)
-			availableByPriority[priority] = append(availableByPriority[priority], candidate)
+			eligible = append(eligible, candidate)
 			continue
 		}
 		if reason == blockReasonCooldown {
@@ -263,7 +270,7 @@ func (m *Manager) availableAuthsForRouteModel(auths []*Auth, provider, routeMode
 		}
 	}
 
-	if len(availableByPriority) == 0 {
+	if len(eligible) == 0 {
 		if cooldownCount == len(auths) && !earliest.IsZero() {
 			providerForError := provider
 			if providerForError == "mixed" {
@@ -278,20 +285,41 @@ func (m *Manager) availableAuthsForRouteModel(auths []*Auth, provider, routeMode
 		return nil, &Error{Code: "auth_unavailable", Message: "no auth available"}
 	}
 
+	sort.Slice(eligible, func(i, j int) bool {
+		leftPriority := authPriority(eligible[i])
+		rightPriority := authPriority(eligible[j])
+		if leftPriority != rightPriority {
+			return leftPriority > rightPriority
+		}
+		return eligible[i].ID < eligible[j].ID
+	})
+	return eligible, nil
+}
+
+func highestPriorityAuths(auths []*Auth) []*Auth {
+	if len(auths) == 0 {
+		return nil
+	}
 	bestPriority := 0
 	found := false
-	for priority := range availableByPriority {
+	for _, candidate := range auths {
+		priority := authPriority(candidate)
 		if !found || priority > bestPriority {
 			bestPriority = priority
 			found = true
 		}
 	}
 
-	available := availableByPriority[bestPriority]
+	available := make([]*Auth, 0, len(auths))
+	for _, candidate := range auths {
+		if authPriority(candidate) == bestPriority {
+			available = append(available, candidate)
+		}
+	}
 	if len(available) > 1 {
 		sort.Slice(available, func(i, j int) bool { return available[i].ID < available[j].ID })
 	}
-	return available, nil
+	return available
 }
 
 func selectionArgForSelector(selector Selector, routeModel string) string {
@@ -974,19 +1002,20 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 		m.mu.RUnlock()
 		return nil, nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
-	available, errAvailable := m.availableAuthsForRouteModel(candidates, provider, model, time.Now())
-	if errAvailable != nil {
+	eligible, errEligible := m.eligibleAuthsForRouteModel(candidates, provider, model, time.Now())
+	if errEligible != nil {
 		m.mu.RUnlock()
-		return nil, nil, errAvailable
+		return nil, nil, errEligible
 	}
-	available = cloneAuthSlice(available)
+	eligible = cloneAuthSlice(eligible)
 	m.mu.RUnlock()
 
-	selected, handled, errPick := m.pickViaPluginScheduler(ctx, pluginScheduler, provider, []string{provider}, model, opts, tried, available)
+	selected, handled, errPick := m.pickViaPluginScheduler(ctx, pluginScheduler, provider, []string{provider}, model, opts, tried, eligible)
 	if errPick != nil {
 		return nil, nil, errPick
 	}
 	if !handled {
+		available := highestPriorityAuths(eligible)
 		selected, errPick = selector.Pick(ctx, provider, selectionArgForSelector(selector, model), opts, available)
 		if errPick != nil {
 			return nil, nil, errPick
@@ -1233,19 +1262,20 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		m.mu.RUnlock()
 		return nil, nil, "", &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
-	available, errAvailable := m.availableAuthsForRouteModel(candidates, "mixed", model, time.Now())
-	if errAvailable != nil {
+	eligible, errEligible := m.eligibleAuthsForRouteModel(candidates, "mixed", model, time.Now())
+	if errEligible != nil {
 		m.mu.RUnlock()
-		return nil, nil, "", errAvailable
+		return nil, nil, "", errEligible
 	}
-	available = cloneAuthSlice(available)
+	eligible = cloneAuthSlice(eligible)
 	m.mu.RUnlock()
 
-	selected, handled, errPick := m.pickViaPluginScheduler(ctx, pluginScheduler, "mixed", providers, model, opts, tried, available)
+	selected, handled, errPick := m.pickViaPluginScheduler(ctx, pluginScheduler, "mixed", providers, model, opts, tried, eligible)
 	if errPick != nil {
 		return nil, nil, "", errPick
 	}
 	if !handled {
+		available := highestPriorityAuths(eligible)
 		selected, errPick = selector.Pick(ctx, "mixed", selectionArgForSelector(selector, model), opts, available)
 		if errPick != nil {
 			return nil, nil, "", errPick

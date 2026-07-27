@@ -63,6 +63,14 @@ Within the selected account layer and profile tier, the plugin SHALL consider on
 - **WHEN** all priority 100 accounts are excluded or already tried
 - **THEN** the scheduler proceeds to the next lower eligible priority
 
+#### Scenario: Plugin receives lower priorities before filtering
+- **WHEN** multiple host-available accounts have different host priorities
+- **THEN** the host supplies all of them to the plugin so plugin quota and backup filtering can choose the highest remaining eligible plugin priority
+
+#### Scenario: Unhandled plugin preserves built-in priority
+- **WHEN** the plugin leaves a scheduling request unhandled
+- **THEN** the host applies its built-in highest-priority reduction before invoking the configured built-in selector
+
 ### Requirement: Weighted selection
 The plugin SHALL use smooth weighted round-robin among accounts in the same active layer, profile tier, and priority.
 
@@ -81,6 +89,10 @@ The plugin SHALL retain a session-to-account binding only while the bound accoun
 - **WHEN** a session has a non-expired binding to an eligible account in the current strict selection group
 - **THEN** the scheduler returns the bound account
 
+#### Scenario: Derived session identity
+- **WHEN** the host supplies a stable `derived_session_id` in scheduler metadata for a request without an explicit session header
+- **THEN** the plugin uses that identity for the same strict-group affinity behavior
+
 #### Scenario: Profile switch invalidates lower-tier affinity
 - **WHEN** a session is bound to a paid account and the active profile changes to `free-first` while a Free account is eligible
 - **THEN** the scheduler ignores the paid binding and creates a new binding in the Free tier
@@ -88,6 +100,10 @@ The plugin SHALL retain a session-to-account binding only while the bound accoun
 #### Scenario: Bound account becomes unavailable
 - **WHEN** the bound account is no longer an eligible candidate
 - **THEN** the scheduler removes the binding and selects another account
+
+#### Scenario: Affinity state remains bounded
+- **WHEN** many unique sessions and policy revisions are observed over time
+- **THEN** the plugin removes expired or mismatched affinity entries and discards weighted state from prior policy revisions
 
 ### Requirement: Retry-aware fallback
 The plugin SHALL make each scheduling decision from the candidate list supplied by the host and SHALL not reselect an account omitted by the host after a failed attempt.

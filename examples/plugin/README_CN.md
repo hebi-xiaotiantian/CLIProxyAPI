@@ -25,6 +25,7 @@
 - `host-callback/`：使用最小插件资源演示宿主回调。
 - `host-callback-auth-files/`：仅 Go 实现的插件资源，演示 host 凭证文件回调。
 - `host-model-callback/`：仅 Go 实现的插件资源，演示调用宿主模型执行回调。
+- `codex-account-pool/`：仅 Go 实现的 Codex 账号池插件，提供严格优先级、同级权重、备用账号、额度刷新和统一管理界面。
 
 多数标准能力示例都包含 `go/`、`c/` 和 `rust/` 三个子目录。专用示例可能只提供所需的实现语言。
 

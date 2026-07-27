@@ -45,12 +45,16 @@ The management resource SHALL expose persistent and temporary route-profile cont
 - **WHEN** the operator clears the override
 - **THEN** the persistent profile becomes effective immediately
 
+#### Scenario: Custom plan order
+- **WHEN** the operator activates `custom` and chooses a plan order
+- **THEN** the plugin validates and persists that order for subsequent scheduling decisions
+
 ### Requirement: Quota controls and diagnostics
 The management resource SHALL provide manual quota refresh, next-refresh visibility, snapshot freshness, sanitized errors, and per-account refresh status.
 
 #### Scenario: Refresh selected accounts
 - **WHEN** the operator selects accounts and invokes refresh
-- **THEN** the page shows queued, refreshing, succeeded, or failed state for each selected account
+- **THEN** the page polls and shows queued, refreshing, succeeded, or failed state for each selected account until work reaches a terminal state or the bounded polling limit is reached
 
 #### Scenario: Refresh error is displayed
 - **WHEN** an account refresh fails
@@ -88,3 +92,7 @@ The plugin SHALL retain the previous valid policy state when persisted policy lo
 #### Scenario: Atomic write fails
 - **WHEN** persisting a policy update fails
 - **THEN** the plugin returns an error and continues using the prior in-memory policy snapshot
+
+#### Scenario: Configuration reload overlaps a state update
+- **WHEN** configuration reload overlaps a policy mutation or quota result commit
+- **THEN** state loading and snapshot replacement are serialized with those mutations so a stale file read cannot overwrite the newer state

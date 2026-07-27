@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Codex Account Pool</title>
+  <style>
+    :root{color-scheme:light;--bg:#f5f7f9;--surface:#fff;--line:#d8dee5;--text:#18212b;--muted:#66727f;--accent:#176b87;--accent-soft:#e5f3f7;--good:#18794e;--warn:#9a6700;--bad:#b42318;--shadow:0 1px 2px rgba(17,24,39,.06)}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;letter-spacing:0}
+    button,input,select{font:inherit}button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.55}
+    .topbar{position:sticky;top:0;z-index:10;border-bottom:1px solid var(--line);background:rgba(255,255,255,.96);backdrop-filter:blur(8px)}
+    .topbar-inner{max-width:1500px;margin:auto;min-height:58px;padding:9px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+    h1{font-size:17px;line-height:1.2;margin:0 8px 0 0}.status{color:var(--muted);font-size:12px}
+    .spacer{flex:1}.control{height:34px;border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:0 10px;color:var(--text)}
+    .button{height:34px;border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:0 12px;color:var(--text);font-weight:600}
+    .button:hover{border-color:#9eabb8}.button.primary{background:var(--accent);border-color:var(--accent);color:#fff}.button.danger{color:var(--bad)}
+    .segments{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--surface)}
+    .segments button{height:32px;border:0;border-right:1px solid var(--line);background:transparent;padding:0 11px;color:var(--muted)}.segments button:last-child{border-right:0}.segments button.active{background:var(--accent-soft);color:var(--accent);font-weight:700}
+    main{max-width:1500px;margin:auto;padding:16px 18px 32px}.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+    .toolbar .control{min-width:160px}.summary{font-size:12px;color:var(--muted);margin-left:auto}
+    .batch{display:none;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 12px;border:1px solid #a9cbd6;background:#eff8fa;border-radius:6px;margin-bottom:10px}.batch.visible{display:flex}.batch strong{color:var(--accent)}
+    .table-wrap{border:1px solid var(--line);background:var(--surface);box-shadow:var(--shadow);overflow:auto;border-radius:6px}
+    table{width:100%;min-width:1220px;border-collapse:collapse;table-layout:fixed}th,td{border-bottom:1px solid #e7ebef;padding:8px 7px;text-align:left;vertical-align:middle}
+    th{position:sticky;top:0;background:#f8fafb;color:#4b5967;font-size:12px;font-weight:700;z-index:2}tr:last-child td{border-bottom:0}tbody tr:hover{background:#fafcfd}tbody tr.changed{background:#fff9e8}
+    .check{width:38px;text-align:center}.account{width:245px}.plan{width:88px}.quota{width:110px}.state{width:108px}.number{width:90px}.toggle{width:72px;text-align:center}.actions{width:90px}
+    .account-name{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.account-sub{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
+    .pill{display:inline-flex;align-items:center;min-height:22px;padding:2px 7px;border-radius:999px;background:#edf1f4;color:#4c5b68;font-size:11px;font-weight:700}.pill.free{background:#e7f6ed;color:var(--good)}.pill.paid{background:#e8f0ff;color:#315ca8}.pill.backup{background:#fff1df;color:#8b5200}.pill.refreshing{background:#e5f3f7;color:var(--accent)}.pill.failed{background:#fdecec;color:var(--bad)}
+    .meter{height:5px;background:#e7ebef;border-radius:5px;overflow:hidden;margin-top:4px}.meter span{display:block;height:100%;background:var(--good)}.meter.warn span{background:var(--warn)}.meter.bad span{background:var(--bad)}
+    .number-input{width:72px;height:30px;border:1px solid var(--line);border-radius:5px;padding:0 7px}.number-input:focus,.control:focus{outline:2px solid #b7dce7;outline-offset:1px;border-color:var(--accent)}
+    .switch{width:36px;height:20px;border:0;border-radius:999px;background:#bec7d0;padding:2px;vertical-align:middle}.switch span{display:block;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .15s}.switch.on{background:var(--accent)}.switch.on span{transform:translateX(16px)}
+    .empty{padding:42px;text-align:center;color:var(--muted)}.error{color:var(--bad)}.success{color:var(--good)}.state-sub{font-size:10px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.hidden{display:none!important}
+    dialog{border:1px solid var(--line);border-radius:7px;box-shadow:0 20px 60px rgba(17,24,39,.24);padding:0;max-width:440px;width:calc(100% - 28px)}dialog::backdrop{background:rgba(17,24,39,.35)}
+    .dialog-body{padding:18px}.dialog-body h2{font-size:17px;margin:0 0 12px}.dialog-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid var(--line)}
+    .key-row{display:flex;gap:8px}.key-row input{flex:1}.preview{white-space:pre-wrap;background:#f6f8fa;border:1px solid var(--line);border-radius:6px;padding:12px;max-height:280px;overflow:auto}
+    @media(max-width:720px){.topbar{position:static}.topbar-inner,main{padding-left:10px;padding-right:10px}.spacer{display:none}.summary{width:100%;margin-left:0}.toolbar .control{flex:1;min-width:130px}.batch .control{min-width:92px;flex:1}h1{width:100%}}
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <h1>Codex Account Pool</h1>
+      <span id="connectionStatus" class="status">未连接</span>
+      <div class="segments" id="profileSegments" aria-label="路由模式">
+        <button data-profile="paid-first">付费优先</button>
+        <button data-profile="free-first">Free 优先</button>
+        <button data-profile="free-only">仅 Free</button>
+        <button data-profile="custom">自定义</button>
+      </div>
+      <select class="control" id="profileDuration" aria-label="模式持续时间"><option value="0">永久</option><option value="60">1 小时</option><option value="360">6 小时</option></select>
+      <select class="control" id="customPlanOrder" aria-label="自定义套餐顺序">
+        <option value="paid,free,unknown">付费 → Free → 未知</option>
+        <option value="free,paid,unknown">Free → 付费 → 未知</option>
+        <option value="paid,unknown,free">付费 → 未知 → Free</option>
+        <option value="free,unknown,paid">Free → 未知 → 付费</option>
+        <option value="unknown,paid,free">未知 → 付费 → Free</option>
+        <option value="unknown,free,paid">未知 → Free → 付费</option>
+      </select>
+      <span id="profileStatus" class="status"></span>
+      <button class="button hidden" id="clearTemporaryButton">清除临时模式</button>
+      <div class="spacer"></div>
+      <button class="button" id="previewButton">调度预览</button>
+      <button class="button" id="refreshButton">刷新额度</button>
+      <button class="button primary" id="applyButton" disabled>应用更改</button>
+    </div>
+  </header>
+  <main>
+    <section class="toolbar">
+      <input class="control" id="searchInput" type="search" placeholder="搜索账号">
+      <select class="control" id="planFilter"><option value="">全部套餐</option><option value="free">Free</option><option value="paid">付费</option><option value="unknown">未知</option></select>
+      <select class="control" id="stateFilter"><option value="">全部状态</option><option value="ready">可用</option><option value="disabled">已停用</option><option value="backup">备用</option><option value="stale">额度过期</option></select>
+      <button class="button" id="selectFreeButton">选择全部 Free</button>
+      <button class="button" id="selectPaidButton">选择全部付费</button>
+      <span class="summary" id="summary"></span>
+    </section>
+    <section class="batch" id="batchBar">
+      <strong id="selectedCount">已选择 0 个</strong>
+      <input class="control" id="batchPriority" type="number" placeholder="优先级">
+      <input class="control" id="batchWeight" type="number" min="1" placeholder="权重">
+      <select class="control" id="batchBackup"><option value="">备用不变</option><option value="false">设为普通</option><option value="true">设为备用</option></select>
+      <select class="control" id="batchEnabled"><option value="">启用不变</option><option value="true">启用</option><option value="false">停用</option></select>
+      <input class="control" id="batchFiveHourReserve" type="number" min="0" max="100" placeholder="5h 保留">
+      <input class="control" id="batchWeeklyReserve" type="number" min="0" max="100" placeholder="周保留">
+      <button class="button" id="applyBatchButton">应用到所选</button>
+      <button class="button" id="refreshSelectedButton">刷新所选</button>
+    </section>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th class="check"><input id="selectAll" type="checkbox" aria-label="全选"></th><th class="account">账号</th><th class="plan">套餐</th><th class="quota">5 小时</th><th class="quota">周额度</th><th class="state">状态</th><th class="number">优先级</th><th class="number">权重</th><th class="toggle">备用</th><th class="toggle">启用</th><th class="number">5h 保留</th><th class="number">周保留</th></tr></thead>
+        <tbody id="accountRows"><tr><td colspan="12" class="empty">输入管理密钥后加载账号</td></tr></tbody>
+      </table>
+    </div>
+  </main>
+  <dialog id="keyDialog">
+    <form method="dialog">
+      <div class="dialog-body"><h2>连接管理接口</h2><div class="key-row"><input class="control" id="keyInput" type="password" autocomplete="current-password" placeholder="Management Key"></div></div>
+      <div class="dialog-actions"><button class="button primary" id="connectButton" value="default">连接</button></div>
+    </form>
+  </dialog>
+  <dialog id="previewDialog">
+    <div class="dialog-body"><h2>调度预览</h2><input class="control" id="previewModel" placeholder="模型，可留空"><pre class="preview" id="previewOutput">等待预览</pre></div>
+    <div class="dialog-actions"><button class="button" id="runPreviewButton">运行</button><button class="button" onclick="previewDialog.close()">关闭</button></div>
+  </dialog>
+  <script>
+    const apiBase="/v0/management/codex-account-pool";let managementKey=sessionStorage.getItem("codexPoolKey")||"";let accounts=[];let pending=new Map();let selected=new Set();let currentProfile="";
+    const $=id=>document.getElementById(id);const escapeHTML=value=>String(value??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]));
+    async function api(path,options={}){const headers={"X-Management-Key":managementKey,"Content-Type":"application/json",...(options.headers||{})};const response=await fetch(apiBase+path,{...options,headers});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.message||data.error||`HTTP ${response.status}`);return data}
+    function policyFor(account){return {...account.policy,...(pending.get(account.id)||{})}}function quotaCell(value,present){if(!present)return'<span class="status">--</span>';const n=Number(value||0),cls=n<=10?"bad":n<=30?"warn":"";return `<strong>${n}%</strong><div class="meter ${cls}"><span style="width:${n}%"></span></div>`}function shortTime(value){if(!value)return"";const date=new Date(value);return Number.isNaN(date.getTime())?"":date.toLocaleString()}
+    function filtered(){const query=$("searchInput").value.trim().toLowerCase(),plan=$("planFilter").value,state=$("stateFilter").value;return accounts.filter(a=>{const p=policyFor(a);if(query&&!`${a.label||""} ${a.email||""} ${a.id}`.toLowerCase().includes(query))return false;if(plan&&a.plan!==plan)return false;if(state==="backup"&&!p.backup)return false;if(state==="disabled"&&p.enabled&&!a.host_disabled)return false;if(state==="stale"&&a.quota_fresh)return false;if(state==="ready"&&(!p.enabled||a.host_disabled||a.host_unavailable||!a.quota_fresh))return false;return true})}
+    function render(){const rows=filtered();$("summary").textContent=`显示 ${rows.length} / ${accounts.length} 个账号`;updateBatch();if(!rows.length){$("accountRows").innerHTML='<tr><td colspan="12" class="empty">没有符合条件的账号</td></tr>';return}$("accountRows").innerHTML=rows.map(a=>{const p=policyFor(a),changed=pending.has(a.id),refresh=a.refresh||{},refreshing=refresh.state==="queued"||refresh.state==="refreshing",failed=refresh.state==="failed",status=!p.enabled||a.host_disabled?"已停用":a.host_unavailable?"不可用":refreshing?(refresh.state==="queued"?"等待刷新":"刷新中"):failed?"刷新失败":p.backup?"备用":!a.quota_fresh?"额度过期":"可用",statusClass=refreshing?"refreshing":failed?"failed":p.backup?"backup":"",next=shortTime(refresh.next_refresh),detail=refreshing&&next?`下次 ${next}`:failed?(refresh.last_error||"刷新失败"):next?`下次 ${next}`:"";return `<tr class="${changed?"changed":""}" data-id="${escapeHTML(a.id)}"><td class="check"><input type="checkbox" data-select="${escapeHTML(a.id)}" ${selected.has(a.id)?"checked":""}></td><td class="account"><div class="account-name">${escapeHTML(a.label||a.email||a.id)}</div><div class="account-sub">${escapeHTML(a.email||a.id)}</div></td><td><span class="pill ${a.plan}">${escapeHTML(a.plan_type||a.plan)}</span></td><td>${quotaCell(a.five_hour_remaining,a.five_hour_window_present)}</td><td>${quotaCell(a.weekly_remaining,a.weekly_window_present)}</td><td><span class="pill ${statusClass}">${status}</span>${detail?`<div class="state-sub" title="${escapeHTML(detail)}">${escapeHTML(detail)}</div>`:""}</td><td><input class="number-input" type="number" data-field="priority" value="${p.priority}"></td><td><input class="number-input" type="number" min="1" data-field="weight" value="${p.weight}"></td><td class="toggle"><button class="switch ${p.backup?"on":""}" data-toggle="backup" aria-label="备用"><span></span></button></td><td class="toggle"><button class="switch ${p.enabled?"on":""}" data-toggle="enabled" aria-label="启用"><span></span></button></td><td><input class="number-input" type="number" min="0" max="100" data-field="five_hour_reserve" value="${p.five_hour_reserve}"></td><td><input class="number-input" type="number" min="0" max="100" data-field="weekly_reserve" value="${p.weekly_reserve}"></td></tr>`}).join("");bindRows();updateBatch()}
+    function bindRows(){document.querySelectorAll("#accountRows tr[data-id]").forEach(row=>{const id=row.dataset.id;row.querySelector("[data-select]").onchange=e=>{e.target.checked?selected.add(id):selected.delete(id);updateBatch()};row.querySelectorAll("[data-field]").forEach(input=>input.onchange=()=>edit(id,input.dataset.field,Number(input.value)));row.querySelectorAll("[data-toggle]").forEach(button=>button.onclick=()=>edit(id,button.dataset.toggle,!policyFor(accounts.find(a=>a.id===id))[button.dataset.toggle]))})}
+    function edit(id,field,value){pending.set(id,{...(pending.get(id)||{}),[field]:value});$("applyButton").disabled=false;render()}function updateBatch(){$("selectedCount").textContent=`已选择 ${selected.size} 个`;$("batchBar").classList.toggle("visible",selected.size>0)}
+    async function load(){try{const [accountData,profileData]=await Promise.all([api("/accounts"),api("/profile")]);accounts=accountData.accounts||[];currentProfile=profileData.effective;document.querySelectorAll("#profileSegments button").forEach(b=>b.classList.toggle("active",b.dataset.profile===currentProfile));const customOrder=(profileData.custom_plan_order||[]).join(",");if(customOrder)$("customPlanOrder").value=customOrder;const temporary=profileData.temporary,expires=temporary&&shortTime(temporary.expires_at);$("profileStatus").textContent=temporary&&expires?`临时至 ${expires}`:`长期：${profileData.persistent}`;$("clearTemporaryButton").classList.toggle("hidden",!temporary);$("connectionStatus").textContent="已连接";$("connectionStatus").className="status success";render()}catch(error){$("connectionStatus").textContent=error.message;$("connectionStatus").className="status error";throw error}}
+    async function applyPending(){if(!pending.size)return;const updates=[...pending].map(([id,set])=>({id,set}));await api("/accounts",{method:"PATCH",body:JSON.stringify({updates})});pending.clear();$("applyButton").disabled=true;await load()}
+    function batchPatch(){const set={};if($("batchPriority").value!=="")set.priority=Number($("batchPriority").value);if($("batchWeight").value!=="")set.weight=Number($("batchWeight").value);if($("batchBackup").value!=="")set.backup=$("batchBackup").value==="true";if($("batchEnabled").value!=="")set.enabled=$("batchEnabled").value==="true";if($("batchFiveHourReserve").value!=="")set.five_hour_reserve=Number($("batchFiveHourReserve").value);if($("batchWeeklyReserve").value!=="")set.weekly_reserve=Number($("batchWeeklyReserve").value);if(!Object.keys(set).length)return;for(const id of selected)pending.set(id,{...(pending.get(id)||{}),...set});$("applyButton").disabled=pending.size===0;render()}
+    async function setProfile(profile){const duration=Number($("profileDuration").value||0),customPlanOrder=$("customPlanOrder").value.split(",");await api("/profile",{method:"PUT",body:JSON.stringify({profile,duration_minutes:duration,custom_plan_order:customPlanOrder})});await load()}
+    async function pollRefreshStatus(attempt=0){await load();const active=accounts.some(account=>["queued","refreshing"].includes(account.refresh?.state));if(active&&attempt<59)setTimeout(()=>pollRefreshStatus(attempt+1).catch(error=>{$("connectionStatus").textContent=error.message;$("connectionStatus").className="status error"}),2000)}
+    async function refresh(ids=[]){await api("/refresh",{method:"POST",body:JSON.stringify({ids})});$("connectionStatus").textContent="额度刷新已排队";await pollRefreshStatus()}
+    $("applyButton").onclick=()=>applyPending().catch(alert);$("applyBatchButton").onclick=batchPatch;$("refreshButton").onclick=()=>refresh().catch(alert);$("refreshSelectedButton").onclick=()=>refresh([...selected]).catch(alert);
+    $("searchInput").oninput=render;$("planFilter").onchange=render;$("stateFilter").onchange=render;$("selectAll").onchange=e=>{for(const a of filtered())e.target.checked?selected.add(a.id):selected.delete(a.id);render()};
+    $("selectFreeButton").onclick=()=>{for(const a of filtered().filter(a=>a.plan==="free"))selected.add(a.id);render()};$("selectPaidButton").onclick=()=>{for(const a of filtered().filter(a=>a.plan==="paid"))selected.add(a.id);render()};
+    document.querySelectorAll("#profileSegments button").forEach(button=>button.onclick=()=>setProfile(button.dataset.profile).catch(alert));
+    $("clearTemporaryButton").onclick=()=>api("/profile",{method:"PUT",body:JSON.stringify({clear_temporary:true})}).then(load).catch(alert);
+    $("previewButton").onclick=()=>previewDialog.showModal();$("runPreviewButton").onclick=async()=>{try{$("previewOutput").textContent=JSON.stringify(await api("/preview",{method:"POST",body:JSON.stringify({model:$("previewModel").value})}),null,2)}catch(error){$("previewOutput").textContent=error.message}};
+    $("connectButton").onclick=async event=>{event.preventDefault();managementKey=$("keyInput").value;sessionStorage.setItem("codexPoolKey",managementKey);try{await load();keyDialog.close()}catch(error){alert(error.message)}};
+    if(managementKey)load().catch(()=>keyDialog.showModal());else keyDialog.showModal();
+  </script>
+</body>
+</html>
