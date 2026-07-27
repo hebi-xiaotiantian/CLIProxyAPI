@@ -1026,12 +1026,14 @@
     }
 
     async function pollRefreshStatus(generation, attempt = 0) {
-      if (generation !== refreshPollGeneration || document.hidden) {
+      if (generation !== refreshPollGeneration) {
         finishRefreshPolling(generation);
         return;
       }
+      if (document.hidden) return;
       const accountResult = await refreshAccountsResult(generation);
       if (!accountResult.applied) {
+        if (accountResult.reason === "hidden") return;
         if (accountResult.reason === "superseded" &&
           activeRefreshPollGeneration === generation &&
           attempt < 59) {
@@ -1204,10 +1206,15 @@
     document.addEventListener("visibilitychange", () => {
       clearTimeout(accountPollTimer);
       accountPollTimer = 0;
+      clearTimeout(refreshPollTimer);
+      refreshPollTimer = 0;
       if (document.hidden || !managementKey) return;
       const generation = activeRefreshPollGeneration;
       if (generation !== 0) {
-        return refreshAccounts(generation).catch(showError);
+        return pollRefreshStatus(generation).catch(error => {
+          finishRefreshPolling(generation);
+          showError(error);
+        });
       }
       return refreshAccounts().finally(scheduleAccountPolling);
     });

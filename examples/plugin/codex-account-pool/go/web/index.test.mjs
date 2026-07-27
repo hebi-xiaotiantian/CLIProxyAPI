@@ -499,41 +499,105 @@ test("rapid hide and show preserves the manual refresh chain", async () => {
 
   harness.document.hidden = true;
   harness.handlers.get("visibilitychange")();
-  harness.document.hidden = false;
-  const requestsBeforeShow = harness.pendingFetches.length;
-  const immediateRefresh = harness.handlers.get("visibilitychange")();
-  assert.equal(harness.pendingFetches.length - requestsBeforeShow, 1);
+  assert.equal(originalFollowUp.cleared, true);
   assert.equal(harness.api.state().activeRefreshPollGeneration, 1);
-  assert.equal(harness.activeTimers(5000).length, 0);
-  assert.equal(originalFollowUp.cleared, false);
 
-  harness.resolve(harness.pendingFetches.shift(), {
-    accounts: [account("show-immediate", { refresh: { state: "queued" } })]
-  });
-  await immediateRefresh;
+  harness.document.hidden = false;
+  const firstResume = harness.handlers.get("visibilitychange")();
+  const firstResumeRequest = harness.pendingFetches.shift();
+  assert.ok(firstResumeRequest);
 
-  const inFlightFollowUp = harness.fireTimer(originalFollowUp);
-  const oldInFlightRequest = harness.pendingFetches.shift();
   harness.document.hidden = true;
   harness.handlers.get("visibilitychange")();
-  harness.document.hidden = false;
-  const newerVisibilityRefresh = harness.handlers.get("visibilitychange")();
-  const newerVisibilityRequest = harness.pendingFetches.shift();
+  harness.resolve(firstResumeRequest, {
+    accounts: [account("hidden-response", { refresh: { state: "queued" } })]
+  });
+  await firstResume;
+  assert.equal(harness.api.state().activeRefreshPollGeneration, 1);
 
-  harness.resolve(newerVisibilityRequest, {
-    accounts: [account("visibility-new", { refresh: { state: "queued" } })]
+  harness.document.hidden = false;
+  const secondResume = harness.handlers.get("visibilitychange")();
+  const secondResumeRequest = harness.pendingFetches.shift();
+
+  harness.resolve(secondResumeRequest, {
+    accounts: [account("visible-response", { refresh: { state: "queued" } })]
   });
-  await newerVisibilityRefresh;
-  harness.resolve(oldInFlightRequest, {
-    accounts: [account("inflight-old", { refresh: { state: "queued" } })]
-  });
-  await inFlightFollowUp;
+  await secondResume;
 
   const state = harness.api.state();
-  assert.equal(state.accounts[0].id, "visibility-new");
+  assert.equal(state.accounts[0].id, "visible-response");
   assert.equal(state.activeRefreshPollGeneration, 1);
   assert.equal(harness.activeTimers(5000).length, 0);
   assert.equal(harness.activeTimers(2000).length, 1);
+});
+
+test("hidden page clears a scheduled refresh timer and resumes the active generation", async () => {
+  const harness = createHarness();
+  harness.api.setKey("test-key");
+  harness.api.activateRefresh(1);
+
+  const initialPoll = harness.api.pollRefreshStatus(1);
+  harness.resolve(harness.pendingFetches.shift(), {
+    accounts: [account("initial", { refresh: { state: "queued" } })]
+  });
+  await initialPoll;
+  const followUp = harness.activeTimers(2000)[0];
+  assert.ok(followUp);
+
+  harness.document.hidden = true;
+  harness.handlers.get("visibilitychange")();
+  assert.equal(followUp.cleared, true);
+  assert.equal(harness.api.state().activeRefreshPollGeneration, 1);
+  assert.equal(harness.activeTimers(2000).length, 0);
+  assert.equal(harness.activeTimers(5000).length, 0);
+
+  harness.document.hidden = false;
+  const requestsBeforeShow = harness.pendingFetches.length;
+  const resumedPoll = harness.handlers.get("visibilitychange")();
+  assert.equal(harness.pendingFetches.length - requestsBeforeShow, 1);
+  harness.resolve(harness.pendingFetches.shift(), {
+    accounts: [account("resumed", { refresh: { state: "queued" } })]
+  });
+  await resumedPoll;
+
+  assert.equal(harness.api.state().activeRefreshPollGeneration, 1);
+  assert.equal(harness.activeTimers(2000).length, 1);
+  assert.equal(harness.activeTimers(5000).length, 0);
+});
+
+test("in-flight refresh response while hidden keeps the generation resumable", async () => {
+  const harness = createHarness();
+  harness.api.setKey("test-key");
+  harness.api.activateRefresh(1);
+
+  const inFlightPoll = harness.api.pollRefreshStatus(1);
+  const inFlightRequest = harness.pendingFetches.shift();
+  assert.ok(inFlightRequest);
+
+  harness.document.hidden = true;
+  harness.handlers.get("visibilitychange")();
+  harness.resolve(inFlightRequest, {
+    accounts: [account("hidden-response", { refresh: { state: "queued" } })]
+  });
+  await inFlightPoll;
+
+  assert.equal(harness.api.state().activeRefreshPollGeneration, 1);
+  assert.equal(harness.activeTimers(2000).length, 0);
+  assert.equal(harness.activeTimers(5000).length, 0);
+
+  harness.document.hidden = false;
+  const resumedPoll = harness.handlers.get("visibilitychange")();
+  const resumedRequest = harness.pendingFetches.shift();
+  assert.ok(resumedRequest);
+  harness.resolve(resumedRequest, {
+    accounts: [account("visible-response", { refresh: { state: "refreshing" } })]
+  });
+  await resumedPoll;
+
+  assert.equal(harness.api.state().accounts[0].id, "visible-response");
+  assert.equal(harness.api.state().activeRefreshPollGeneration, 1);
+  assert.equal(harness.activeTimers(2000).length, 1);
+  assert.equal(harness.activeTimers(5000).length, 0);
 });
 
 test("superseded manual refresh chain cannot clear its replacement", async () => {

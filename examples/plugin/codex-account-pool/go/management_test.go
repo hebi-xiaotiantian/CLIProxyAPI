@@ -797,7 +797,7 @@ func TestStaticResourceIncludesUsageDisplayAndPollingControls(t *testing.T) {
 		`document.addEventListener("visibilitychange"`,
 		"scheduleAccountPolling",
 		"async function refreshAccounts(generation = null)",
-		"refreshAccounts(generation)",
+		"if (document.hidden) return;",
 		"accountRequestSequence",
 		"startAccountRequest",
 		"accountRequestIsCurrent",
@@ -810,10 +810,11 @@ func TestStaticResourceIncludesUsageDisplayAndPollingControls(t *testing.T) {
 		"activeRefreshPollGeneration !== generation",
 		"document.hidden || !managementKey || activeRefreshPollGeneration !== 0",
 		"refreshAccountsResult",
+		`accountResult.reason === "hidden"`,
 		`reason: "superseded"`,
 		`accountResult.reason === "superseded"`,
 		"const generation = activeRefreshPollGeneration",
-		"refreshAccounts(generation)",
+		"return pollRefreshStatus(generation).catch(error => {",
 		"loadSequence",
 		"stageEdit",
 		"input.oninput",
@@ -846,6 +847,9 @@ func TestStaticResourceIncludesUsageDisplayAndPollingControls(t *testing.T) {
 	}
 	if strings.Contains(text, "!document.hidden && managementKey && activeRefreshPollGeneration === 0") {
 		t.Fatal("visibility refresh must not require activeRefreshPollGeneration === 0")
+	}
+	if strings.Contains(text, "generation !== refreshPollGeneration || document.hidden") {
+		t.Fatal("hidden refresh polling must pause without finishing its generation")
 	}
 	if count := strings.Count(text, "pending.clear()"); count != 1 {
 		t.Fatalf("pending.clear() count = %d, want 1 only after a successful apply", count)
