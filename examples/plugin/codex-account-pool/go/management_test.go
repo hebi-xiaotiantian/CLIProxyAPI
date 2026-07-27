@@ -797,11 +797,23 @@ func TestStaticResourceIncludesUsageDisplayAndPollingControls(t *testing.T) {
 		"scheduleAccountPolling",
 		"async function refreshAccounts(generation = null)",
 		"refreshAccounts(generation)",
+		"accountRequestSequence",
+		"startAccountRequest",
+		"accountRequestIsCurrent",
+		"applyAccountsResponse",
+		"request.sequence === accountRequestSequence",
+		"request.generation === null || request.generation === refreshPollGeneration",
 		"5000",
 	} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("static resource is missing %q", required)
 		}
+	}
+	if count := strings.Count(text, "startAccountRequest(generation)"); count != 2 {
+		t.Fatalf("startAccountRequest(generation) count = %d, want load and refreshAccounts", count)
+	}
+	if count := strings.Count(text, "accounts = accountData.accounts || [];"); count != 1 {
+		t.Fatalf("direct accounts assignment count = %d, want one guarded assignment", count)
 	}
 	if count := strings.Count(text, "pending.clear()"); count != 1 {
 		t.Fatalf("pending.clear() count = %d, want 1 only after a successful apply", count)

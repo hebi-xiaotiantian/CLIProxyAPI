@@ -599,6 +599,7 @@
     let refreshPollGeneration = 0;
     let refreshRequestGeneration = 0;
     let latestSuccessfulRefreshRequest = 0;
+    let accountRequestSequence = 0;
     let accountPollTimer = 0;
 
     const $ = id => document.getElementById(id);
@@ -821,18 +822,44 @@
       $("connectionStatus").className = `status${className ? ` ${className}` : ""}`;
     }
 
+    function startAccountRequest(generation = null) {
+      return {
+        sequence: ++accountRequestSequence,
+        generation,
+        response: api("/accounts").then(
+          accountData => ({ accountData, error: null }),
+          error => ({ accountData: null, error })
+        )
+      };
+    }
+
+    function accountRequestIsCurrent(request) {
+      return request.sequence === accountRequestSequence &&
+        (request.generation === null || request.generation === refreshPollGeneration);
+    }
+
+    function applyAccountsResponse(request, accountData) {
+      if (!accountRequestIsCurrent(request)) return false;
+      accounts = accountData.accounts || [];
+      return true;
+    }
+
     async function load(generation = null) {
       try {
-        const [accountData, profileData, decisionData] = await Promise.all([
-          api("/accounts"),
+        const accountRequest = startAccountRequest(generation);
+        const [accountResult, profileData, decisionData] = await Promise.all([
+          accountRequest.response,
           api("/profile"),
           api("/decisions")
         ]);
         if (generation !== null && generation !== refreshPollGeneration) return false;
-        accounts = accountData.accounts || [];
+        const accountRequestCurrent = accountRequestIsCurrent(accountRequest);
+        if (accountResult.error && accountRequestCurrent) throw accountResult.error;
+        const accountsUpdated = !accountResult.error &&
+          applyAccountsResponse(accountRequest, accountResult.accountData);
         decisions = decisionData.decisions || [];
         updateProfile(profileData);
-        setConnectionStatus("已连接", "success");
+        if (accountsUpdated) setConnectionStatus("已连接", "success");
         renderAccounts();
         renderDecisions();
         scheduleAccountPolling();
@@ -846,18 +873,17 @@
 
     async function refreshAccounts(generation = null) {
       if (document.hidden || !managementKey) return false;
-      try {
-        const accountData = await api("/accounts");
-        if (document.hidden || (generation !== null && generation !== refreshPollGeneration)) return false;
-        accounts = accountData.accounts || [];
-        setConnectionStatus("已连接", "success");
-        renderAccounts();
-        return true;
-      } catch (error) {
-        if (document.hidden || (generation !== null && generation !== refreshPollGeneration)) return false;
-        setConnectionStatus(error.message, "error");
+      const accountRequest = startAccountRequest(generation);
+      const accountResult = await accountRequest.response;
+      if (document.hidden || !accountRequestIsCurrent(accountRequest)) return false;
+      if (accountResult.error) {
+        setConnectionStatus(accountResult.error.message, "error");
         return false;
       }
+      if (!applyAccountsResponse(accountRequest, accountResult.accountData)) return false;
+      setConnectionStatus("已连接", "success");
+      renderAccounts();
+      return true;
     }
 
     function scheduleAccountPolling() {
