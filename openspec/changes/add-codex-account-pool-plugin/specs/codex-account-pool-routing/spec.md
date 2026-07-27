@@ -34,7 +34,31 @@ The plugin SHALL partition eligible accounts into regular and backup layers and 
 - **THEN** the scheduler evaluates eligible backup accounts using the same profile, priority, and weight rules
 
 ### Requirement: Route profiles
-The plugin SHALL support `paid-first`, `free-first`, `free-only`, and `custom` profiles without rewriting host auth files.
+The plugin SHALL support `auto`, `quota-high-first`, `quota-low-first`, `plan-high-first`, `plan-low-first`, `paid-first`, `free-first`, `free-only`, and `custom` profiles without rewriting host auth files.
+
+#### Scenario: Automatic profile
+- **WHEN** `auto` is active
+- **THEN** the scheduler selects the highest known subscription rank, then the highest known remaining quota, and rotates equally among exact ties
+
+#### Scenario: Low-quota profile
+- **WHEN** `quota-low-first` is active
+- **THEN** the scheduler selects the lowest known remaining quota that still satisfies every configured reserve, then the highest known subscription rank
+
+#### Scenario: High-quota profile
+- **WHEN** `quota-high-first` is active
+- **THEN** the scheduler selects the highest known remaining quota, then the highest known subscription rank
+
+#### Scenario: Low-subscription profile
+- **WHEN** `plan-low-first` is active
+- **THEN** the scheduler selects the lowest known subscription rank, then the highest known remaining quota
+
+#### Scenario: High-subscription profile
+- **WHEN** `plan-high-first` is active
+- **THEN** the scheduler selects the highest known subscription rank, then the highest known remaining quota
+
+#### Scenario: Unknown automatic metric
+- **WHEN** an otherwise eligible account has an unknown subscription rank or remaining-quota score
+- **THEN** the scheduler ranks it after accounts having known values for the active automatic profile
 
 #### Scenario: Free-first profile
 - **WHEN** `free-first` is active and eligible Free and paid regular accounts exist
@@ -52,8 +76,38 @@ The plugin SHALL support `paid-first`, `free-first`, `free-only`, and `custom` p
 - **WHEN** a temporary profile override reaches its expiration time
 - **THEN** the scheduler atomically returns to the configured persistent profile
 
+### Requirement: Automatic routing metrics
+The plugin SHALL derive subscription rank from normalized plan type and remaining quota from the minimum remaining percentage across every present quota window.
+
+#### Scenario: Both quota windows are present
+- **WHEN** an account has 70 percent five-hour quota and 40 percent weekly quota
+- **THEN** its automatic remaining-quota score is 40
+
+#### Scenario: Weekly-only quota is present
+- **WHEN** an account has an explicitly absent five-hour window and 60 percent weekly quota
+- **THEN** its automatic remaining-quota score is 60
+
+#### Scenario: Subscription rank ordering
+- **WHEN** Free, Go, Plus, Pro, ProMax, and Enterprise-family accounts are eligible
+- **THEN** their subscription ranks increase in that order
+
+#### Scenario: Reserve precedes low-quota ordering
+- **WHEN** a low-quota account is below either configured reserve
+- **THEN** the scheduler excludes it before comparing automatic routing scores
+
+### Requirement: Automatic and strict modes are exclusive
+The plugin SHALL ignore manual priority and weight while an automatic quota or subscription profile is active and SHALL retain those persisted values for later strict-profile use.
+
+#### Scenario: Automatic mode ignores high manual priority
+- **WHEN** `quota-low-first` is active and a high-priority account has more remaining quota than a lower-priority account
+- **THEN** the lower-quota account is selected regardless of manual priority
+
+#### Scenario: Exact automatic tie
+- **WHEN** multiple accounts have the same complete automatic routing key
+- **THEN** the scheduler rotates equally among them without applying manual weight
+
 ### Requirement: Strict priority selection
-Within the selected account layer and profile tier, the plugin SHALL consider only accounts having the highest numeric priority.
+Within a strict profile's selected account layer and profile tier, the plugin SHALL consider only accounts having the highest numeric priority.
 
 #### Scenario: Lower priority remains idle
 - **WHEN** priority 100 and priority 80 accounts are both eligible in the active layer and profile tier
@@ -72,7 +126,7 @@ Within the selected account layer and profile tier, the plugin SHALL consider on
 - **THEN** the host applies its built-in highest-priority reduction before invoking the configured built-in selector
 
 ### Requirement: Weighted selection
-The plugin SHALL use smooth weighted round-robin among accounts in the same active layer, profile tier, and priority.
+The plugin SHALL use smooth weighted round-robin among accounts in the same active strict layer, profile tier, and priority.
 
 #### Scenario: Three-to-one weighting
 - **WHEN** two continuously eligible accounts have weights three and one in the same selection group
@@ -83,7 +137,7 @@ The plugin SHALL use smooth weighted round-robin among accounts in the same acti
 - **THEN** policy validation rejects the update
 
 ### Requirement: Strict session affinity
-The plugin SHALL retain a session-to-account binding only while the bound account remains in the currently selected strict layer, profile tier, and priority group.
+The plugin SHALL retain a session-to-account binding only while the bound account remains in the currently selected exact strict or automatic selection group.
 
 #### Scenario: Affinity hit inside active group
 - **WHEN** a session has a non-expired binding to an eligible account in the current strict selection group
@@ -96,6 +150,10 @@ The plugin SHALL retain a session-to-account binding only while the bound accoun
 #### Scenario: Profile switch invalidates lower-tier affinity
 - **WHEN** a session is bound to a paid account and the active profile changes to `free-first` while a Free account is eligible
 - **THEN** the scheduler ignores the paid binding and creates a new binding in the Free tier
+
+#### Scenario: Automatic score change invalidates affinity
+- **WHEN** a session is bound under `quota-low-first` and a refreshed snapshot makes another eligible account the unique lowest-quota account
+- **THEN** the scheduler ignores the old binding and selects from the new automatic group
 
 #### Scenario: Bound account becomes unavailable
 - **WHEN** the bound account is no longer an eligible candidate

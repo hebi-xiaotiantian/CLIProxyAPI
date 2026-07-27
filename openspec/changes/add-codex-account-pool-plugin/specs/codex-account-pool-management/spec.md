@@ -31,7 +31,11 @@ The management resource SHALL allow operators to filter and select accounts and 
 - **THEN** the plugin rejects the whole update and leaves all policies unchanged
 
 ### Requirement: Profile controls
-The management resource SHALL expose persistent and temporary route-profile controls without modifying per-account base priorities.
+The management resource SHALL expose persistent and temporary route-profile controls without modifying per-account base priorities or weights.
+
+#### Scenario: Automatic profile selection
+- **WHEN** the operator activates an automatic quota or subscription profile
+- **THEN** the page displays its ordering rule and visually disables manual priority and weight controls while retaining their saved values
 
 #### Scenario: Persistent Free-first selection
 - **WHEN** the operator activates `free-first` without an expiration
@@ -61,15 +65,38 @@ The management resource SHALL provide manual quota refresh, next-refresh visibil
 - **THEN** the page displays a sanitized error without exposing tokens or raw credential JSON
 
 ### Requirement: Scheduling preview
-The management API SHALL return an ordered, non-mutating scheduling preview for a supplied model and optional session identifier.
+The management API SHALL return an ordered, non-mutating scheduling preview for a supplied model and optional session identifier, and the browser resource SHALL render it as an operator-facing route explanation rather than raw JSON.
 
 #### Scenario: Preview current order
 - **WHEN** an operator requests a preview
-- **THEN** the response lists filtered reasons, regular and backup layers, active profile tiers, strict priority groups, and the predicted first choice
+- **THEN** the response lists funnel counts, grouped filtered reasons, regular and backup layers, the active strict or automatic group, and the predicted first choice
+
+#### Scenario: Preview is rendered
+- **WHEN** a preview response succeeds
+- **THEN** the page displays a route funnel, a selected-account summary, an ordered candidate table, and human-readable exclusion reasons without exposing raw JSON
 
 #### Scenario: Preview does not consume weight
 - **WHEN** a preview is requested repeatedly
 - **THEN** smooth weighted round-robin counters and session bindings remain unchanged
+
+### Requirement: Recent real scheduling decisions
+The plugin SHALL retain a bounded in-memory history of real Scheduler selections and SHALL expose it through an authenticated Management API route.
+
+#### Scenario: Real request is scheduled
+- **WHEN** the host invokes the plugin Scheduler and the plugin selects an account
+- **THEN** the plugin records timestamp, model, selected account, active profile, active layer, candidate count, eligible count, and selection-group size
+
+#### Scenario: Preview is requested
+- **WHEN** an operator runs a scheduling preview
+- **THEN** the plugin does not add a recent-decision entry
+
+#### Scenario: Decision history is bounded and secret-free
+- **WHEN** more than the configured maximum number of decisions have occurred
+- **THEN** the oldest entries are discarded and retained entries contain no request body, credential, token, or raw session identifier
+
+#### Scenario: Recent decisions are displayed
+- **WHEN** the operator opens the recent scheduling view
+- **THEN** the page displays the newest real decisions in a readable table and distinguishes them from non-mutating previews
 
 ### Requirement: Management API security
 Account data and state-changing operations SHALL be available only through authenticated Management API routes, while the browser resource SHALL contain static assets only.

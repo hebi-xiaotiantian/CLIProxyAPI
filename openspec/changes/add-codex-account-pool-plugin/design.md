@@ -11,7 +11,7 @@ Standard browser resources are not management-authenticated by the host. The res
 **Goals:**
 
 - Provide one editable account-pool page for all Codex accounts.
-- Support strict profile tiers, account priority, smooth weighted round-robin, independent backups, affinity, and retries.
+- Support automatic quota and subscription ordering, strict profile tiers, account priority, smooth weighted round-robin, independent backups, affinity, and retries.
 - Route against fresh five-hour and weekly subscription quota instead of token estimates.
 - Refresh quota on a schedule and on operator demand without storing credential secrets.
 - Keep scheduler reads fast and deterministic under concurrent requests.
@@ -23,6 +23,7 @@ Standard browser resources are not management-authenticated by the host. The res
 - Modifying host auth files to persist plugin policy.
 - Replacing the main CLIProxyAPI management center.
 - Implementing billing or cost accounting from request token counts.
+- Implementing subscription-expiry ordering until a reliable expiry field is available from the host inventory or quota response.
 - Changing provider translators or core scheduler interfaces.
 - Publishing the plugin to the official plugin registry in the first iteration.
 
@@ -44,26 +45,36 @@ Policy is stored in `policy.json` and quota state in `quota.json` under configur
 
 Alternative: write priority into each host auth file. Rejected because profile switching would rewrite many credentials, trigger watchers, and mix operator policy with OAuth material.
 
-### 3. Model routing as ordered dimensions, not numeric boosts
+### 3. Separate automatic ordering from strict custom routing
 
-Selection uses a tuple instead of adding large numeric offsets:
+Every mode first applies the same non-negotiable dimensions:
 
 1. regular layer before backup layer;
-2. active profile tier;
-3. highest account priority;
-4. affinity hit inside that exact group;
-5. smooth weighted round-robin.
+2. host and plugin eligibility;
+3. fresh quota reserve checks.
 
-Keeping dimensions separate guarantees that a backup account cannot preempt a regular account and that a paid account cannot escape a Free-first tier through an unusually high base priority.
+After those dimensions, the active mode selects one exact group.
 
-The host passes every currently available candidate to the plugin before applying its built-in highest-priority reduction. If the plugin leaves the request unhandled, the host restores the original highest-priority behavior before invoking the built-in selector. This lets the plugin descend to a lower plugin priority after quota filtering without changing non-plugin routing.
+Algorithmic modes ignore manual priority and weight:
 
-The built-in profiles are:
+- `auto` and `plan-high-first`: highest known subscription rank, then highest known remaining quota;
+- `plan-low-first`: lowest known subscription rank, then highest known remaining quota;
+- `quota-high-first`: highest known remaining quota, then highest known subscription rank;
+- `quota-low-first`: lowest known remaining quota, then highest known subscription rank.
+
+Remaining quota is the minimum remaining percentage across present five-hour and weekly windows. Subscription ranks follow the reference ordering: Free, Go, Plus/Team/Business, Pro/ProLite, ProMax, and Enterprise-family plans. Unknown metrics sort after known metrics in both ascending and descending modes. Accounts tied on the full algorithmic key rotate equally.
+
+Strict modes preserve the existing operator controls:
 
 - `paid-first`: paid, Free, unknown;
 - `free-first`: Free, paid, unknown;
 - `free-only`: Free regular accounts, then explicitly marked backups;
-- `custom`: operator-defined plan-group ordering.
+- `custom`: operator-defined plan-group ordering;
+- inside the selected strict tier: highest account priority, then smooth weighted round-robin.
+
+Automatic modes and strict priority/weight modes are intentionally mutually exclusive. Applying manual priority before an automatic quota or subscription key would make the automatic mode appear ineffective; applying it after the key would make weight useful only for rare exact ties.
+
+The host passes every currently available candidate to the plugin before applying its built-in highest-priority reduction. If the plugin leaves the request unhandled, the host restores the original highest-priority behavior before invoking the built-in selector. This lets the plugin descend to a lower plugin priority after quota filtering without changing non-plugin routing.
 
 ### 4. Implement affinity inside the plugin
 
@@ -71,9 +82,9 @@ Returning a concrete `AuthID` from Scheduler bypasses the host's built-in select
 
 The host-provided metadata path includes explicit execution sessions and stable `derived_session_id` values produced from request context, so requests without a client session header can still retain affinity.
 
-Profile changes publish a new policy revision. Affinity entries include that revision and are lazily invalidated, making profile changes immediately effective without a global blocking cache clear.
+Mode changes publish a new policy revision. Affinity entries include that revision and are lazily invalidated, making mode changes immediately effective without a global blocking cache clear.
 
-Weighted state is discarded when the policy revision changes. Expired or mismatched affinity entries are removed while binding new sessions, and the affinity table has a fixed maximum size with oldest-expiry eviction.
+An affinity hit remains valid only when its account still belongs to the currently selected exact strategy group. Quota refreshes can therefore move a low-quota or high-quota session to a different account when the previous binding no longer ranks first. Weighted and equal-rotation state is discarded when the policy revision changes. Expired or mismatched affinity entries are removed while binding new sessions, and the affinity table has a fixed maximum size with oldest-expiry eviction.
 
 ### 5. Use host callbacks for credentials and HTTP
 
@@ -111,10 +122,24 @@ The resource `/v0/resource/plugins/codex-account-pool/pool` serves embedded HTML
 - `PUT /v0/management/codex-account-pool/profile`
 - `POST /v0/management/codex-account-pool/refresh`
 - `POST /v0/management/codex-account-pool/preview`
+- `GET /v0/management/codex-account-pool/decisions`
 
 Plugin routes are exact paths because the host intentionally rejects path parameters and wildcards. Batch targets are supplied in JSON request bodies.
 
-The UI uses a dense table, inline numeric controls, checkboxes, filters, selection, a batch action bar, profile segmented control, custom plan-order selection, refresh actions, and a preview panel. It polls queued and refreshing accounts until they reach a terminal state or a bounded attempt limit. It uses no frontend framework or build-time JavaScript dependency.
+The UI uses a dense table, inline numeric controls, checkboxes, filters, selection, a batch action bar, grouped route-mode selection, custom plan-order selection, refresh actions, and a visual preview panel. Automatic modes visibly disable manual priority and weight controls without deleting their persisted values.
+
+The preview is rendered as an operator-facing route funnel rather than raw JSON:
+
+1. total host candidates;
+2. host-available candidates;
+3. quota-eligible candidates;
+4. active regular or backup layer;
+5. active strategy group;
+6. predicted account.
+
+It also renders an ordered candidate table and grouped exclusion reasons. A bounded in-memory decision ring records only real Scheduler calls, never preview calls, and exposes timestamp, model, selected account, active mode, layer, and group size. It stores no request body, credential, raw session identifier, or token. The page displays these entries as "recent real scheduling" diagnostics.
+
+The page polls queued and refreshing accounts until they reach a terminal state or a bounded attempt limit. It uses no frontend framework or build-time JavaScript dependency.
 
 ### 8. Build and migration follow server compatibility
 
@@ -127,6 +152,9 @@ The first deployment runs with `stale_policy=allow` until initial snapshots are 
 - The Codex usage endpoint is not a stable public API. -> Keep endpoint and headers isolated in `quota_client.go`, preserve the last valid snapshot, and expose sanitized failures.
 - A C ABI plugin runs as trusted in-process code. -> Minimize dependencies, validate every management payload, recover at the ABI boundary, and never log secrets.
 - Smooth weighted round-robin requires mutable counters. -> Lock only the selected group state and keep network and persistence work outside the lock.
+- Low-quota mode can rapidly drain one account. -> Apply reserve eligibility before ordering, show the active quota score in preview, and immediately move to the next account when the reserve is reached.
+- Automatic modes can be confused with manual priority. -> Disable priority and weight editing affordances while an automatic mode is active and state clearly that saved custom values remain unchanged.
+- Subscription plan labels are not fully standardized. -> Normalize known plan families into explicit ranks and place unknown values last instead of guessing.
 - Resource HTML is publicly fetchable when the server is public. -> Embed no account data, require Management API authentication for all data, and restrict management networking.
 - `stale_policy=exclude` can stop routing during a prolonged quota outage. -> Expose an explicit `allow` override and clear diagnostics; do not silently bypass policy.
 - Host auth files can change while a refresh runs. -> Resolve the current auth index and credential immediately before each request and never cache tokens.
@@ -142,11 +170,9 @@ The first deployment runs with `stale_policy=allow` until initial snapshots are 
 5. Disable `low-quota-scheduler`; keep the usage tracker temporarily if desired.
 6. Enable `codex-account-pool` with `stale_policy=allow` and verify account inventory and manual quota refresh.
 7. Configure account policies and profiles in the management table.
-8. Switch to `stale_policy=exclude`, run scheduling previews, and verify live failover.
+8. Switch to `stale_policy=exclude`, run visual scheduling previews, issue one real request, and verify the corresponding recent decision.
 9. Roll back by disabling the new plugin, re-enabling the old scheduler, and restoring the previous configuration; plugin state files can remain unused.
 
 ## Open Questions
 
-- Confirm the deployed server binary commit and Go version before producing the Linux artifact.
-- Confirm whether the server architecture is `amd64` or `arm64`.
-- Confirm the preferred absolute plugin state directory during deployment.
+- None for the quota and subscription routing increment. Subscription-expiry ordering remains deferred until a reliable source field exists.

@@ -6,11 +6,12 @@ CLIProxyAPI can prioritize credentials and delegate scheduling, but operators ca
 
 - Add a standard dynamic-library plugin named `codex-account-pool` that owns Codex credential selection.
 - Add strict regular-versus-backup account layers, profile tiers, per-account priority, and smooth weighted round-robin within the highest eligible priority.
+- Add automatic, quota-high-first, quota-low-first, plan-high-first, and plan-low-first routing modes while preserving the existing strict custom modes.
 - Add plugin-owned session affinity that remains constrained by the active strict priority tier.
 - Fetch and persist Codex five-hour and weekly quota snapshots, plan type, reset times, freshness, and refresh errors.
 - Add staggered scheduled quota refresh, bounded concurrency, manual refresh, and delayed refresh after quota-related failures.
 - Add a management resource with a single editable account table for inline priority, weight, backup, enabled, and quota-reserve controls.
-- Add filters, selection, batch editing, route-profile switching, temporary Free-first overrides, and scheduling previews.
+- Add filters, selection, batch editing, route-mode switching, temporary overrides, visual scheduling previews, and recent real scheduler decisions.
 - Keep OAuth credentials in host-managed auth files; store only account policy and quota snapshots in plugin-owned state.
 - Document Linux plugin builds, migration from the existing scheduler plugin, and restricted management access.
 
@@ -18,9 +19,9 @@ CLIProxyAPI can prioritize credentials and delegate scheduling, but operators ca
 
 ### New Capabilities
 
-- `codex-account-pool-routing`: Strict account eligibility, regular and backup layers, route profiles, priority, weighted selection, affinity, and retry behavior.
+- `codex-account-pool-routing`: Strict account eligibility, regular and backup layers, automatic quota and subscription ordering, strict custom profiles, weighted selection, affinity, and retry behavior.
 - `codex-account-quota-refresh`: Codex plan detection, five-hour and weekly quota snapshots, refresh scheduling, freshness rules, and failure handling.
-- `codex-account-pool-management`: Management APIs and an editable browser resource for account policies, batch actions, route profiles, refresh controls, and scheduling previews.
+- `codex-account-pool-management`: Management APIs and an editable browser resource for account policies, batch actions, route modes, refresh controls, visual scheduling previews, and recent real decisions.
 
 ### Modified Capabilities
 
