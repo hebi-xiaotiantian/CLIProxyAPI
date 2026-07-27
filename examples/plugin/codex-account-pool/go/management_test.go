@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -813,6 +814,14 @@ func TestStaticResourceIncludesUsageDisplayAndPollingControls(t *testing.T) {
 		`accountResult.reason === "superseded"`,
 		"const generation = activeRefreshPollGeneration",
 		"refreshAccounts(generation)",
+		"loadSequence",
+		"stageEdit",
+		"input.oninput",
+		"accountEditIsFocused",
+		"renderAccounts(true)",
+		`tabindex="0"`,
+		`role="status" aria-live="polite"`,
+		"refreshPollTimer",
 		"5000",
 	} {
 		if !strings.Contains(text, required) {
@@ -833,6 +842,18 @@ func TestStaticResourceIncludesUsageDisplayAndPollingControls(t *testing.T) {
 	}
 	if count := strings.Count(text, "pending.clear()"); count != 1 {
 		t.Fatalf("pending.clear() count = %d, want 1 only after a successful apply", count)
+	}
+}
+
+func TestWebIndexJavaScript(t *testing.T) {
+	nodePath, errLookPath := exec.LookPath("node")
+	if errLookPath != nil {
+		t.Skip("node is not installed")
+	}
+	command := exec.Command(nodePath, "--test", "web/index.test.mjs")
+	output, errRun := command.CombinedOutput()
+	if errRun != nil {
+		t.Fatalf("node --test web/index.test.mjs failed: %v\n%s", errRun, output)
 	}
 }
 

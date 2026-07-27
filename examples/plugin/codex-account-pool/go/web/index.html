@@ -360,7 +360,7 @@
   <header class="topbar">
     <div class="topbar-inner">
       <h1>Codex Account Pool</h1>
-      <span id="connectionStatus" class="status">未连接</span>
+      <span id="connectionStatus" class="status" role="status" aria-live="polite">未连接</span>
       <div class="spacer"></div>
       <button class="button" id="reloadButton">重新加载</button>
       <button class="button" id="previewButton">调度预览</button>
@@ -600,8 +600,10 @@
     let refreshRequestGeneration = 0;
     let latestSuccessfulRefreshRequest = 0;
     let accountRequestSequence = 0;
+    let loadSequence = 0;
     let activeRefreshPollGeneration = 0;
     let accountPollTimer = 0;
+    let refreshPollTimer = 0;
 
     const $ = id => document.getElementById(id);
     const escapeHTML = value => String(value ?? "").replace(/[&<>"']/g, character => ({
@@ -666,7 +668,7 @@
         `更新：${updated}`
       ].join("\n");
       return `
-        <div title="${escapeHTML(details)}" aria-label="${escapeHTML(details)}">
+        <div tabindex="0" title="${escapeHTML(details)}" aria-label="${escapeHTML(details)}">
           <div class="usage-total">代理累计 · 总量 ${formatTokens(usage.total_tokens)}</div>
           <div class="usage-detail">输入 ${formatTokens(usage.input_tokens)} · 输出 ${formatTokens(usage.output_tokens)} · 推理 ${formatTokens(usage.reasoning_tokens)} · 缓存 ${formatTokens(usage.cache_tokens)}</div>
         </div>`;
@@ -695,14 +697,22 @@
       });
     }
 
-    function renderAccounts() {
+    function accountEditIsFocused() {
+      const activeElement = document.activeElement;
+      return Boolean(activeElement &&
+        typeof activeElement.matches === "function" &&
+        activeElement.matches("#accountRows input[data-field]"));
+    }
+
+    function renderAccounts(preserveFocusedEdit = false) {
       const rows = filtered();
       const automatic = automaticProfiles.has(currentProfile);
       $("summary").textContent = `显示 ${rows.length} / ${accounts.length} 个账号`;
       updateBatch();
+      if (preserveFocusedEdit && accountEditIsFocused()) return false;
       if (!rows.length) {
         $("accountRows").innerHTML = '<tr><td colspan="13" class="empty">没有符合条件的账号</td></tr>';
-        return;
+        return true;
       }
       $("accountRows").innerHTML = rows.map(account => {
         const policy = policyFor(account);
@@ -744,6 +754,7 @@
       }).join("");
       bindRows();
       updateBatch();
+      return true;
     }
 
     function bindRows() {
@@ -754,7 +765,17 @@
           updateBatch();
         };
         row.querySelectorAll("[data-field]").forEach(input => {
-          input.onchange = () => edit(id, input.dataset.field, Number(input.value));
+          let finished = false;
+          const finish = () => {
+            if (finished) return;
+            finished = true;
+            renderAccounts();
+          };
+          input.oninput = () => {
+            stageEdit(id, input.dataset.field, Number(input.value), row);
+          };
+          input.onchange = finish;
+          input.onblur = finish;
         });
         row.querySelectorAll("[data-toggle]").forEach(button => {
           button.onclick = () => {
@@ -765,9 +786,14 @@
       });
     }
 
-    function edit(id, field, value) {
+    function stageEdit(id, field, value, row = null) {
       pending.set(id, { ...(pending.get(id) || {}), [field]: value });
       $("applyButton").disabled = false;
+      if (row) row.classList.add("changed");
+    }
+
+    function edit(id, field, value) {
+      stageEdit(id, field, value);
       renderAccounts();
     }
 
@@ -845,15 +871,22 @@
       return true;
     }
 
+    function loadIsCurrent(sequence, generation) {
+      return sequence === loadSequence &&
+        (generation === null || generation === refreshPollGeneration);
+    }
+
     async function load(generation = null) {
+      const sequence = ++loadSequence;
+      let accountRequest = null;
       try {
-        const accountRequest = startAccountRequest(generation);
+        accountRequest = startAccountRequest(generation);
         const [accountResult, profileData, decisionData] = await Promise.all([
           accountRequest.response,
           api("/profile"),
           api("/decisions")
         ]);
-        if (generation !== null && generation !== refreshPollGeneration) return false;
+        if (!loadIsCurrent(sequence, generation)) return false;
         const accountRequestCurrent = accountRequestIsCurrent(accountRequest);
         if (accountResult.error && accountRequestCurrent) throw accountResult.error;
         const accountsUpdated = !accountResult.error &&
@@ -866,7 +899,8 @@
         scheduleAccountPolling();
         return true;
       } catch (error) {
-        if (generation !== null && generation !== refreshPollGeneration) return false;
+        if (!loadIsCurrent(sequence, generation)) return false;
+        if (accountRequest && !accountRequestIsCurrent(accountRequest)) return false;
         setConnectionStatus(error.message, "error");
         throw error;
       }
@@ -893,7 +927,7 @@
         return { applied: false, reason: "stale" };
       }
       setConnectionStatus("已连接", "success");
-      renderAccounts();
+      renderAccounts(true);
       return { applied: true, reason: "applied" };
     }
 
@@ -904,9 +938,22 @@
 
     function finishRefreshPolling(generation) {
       if (activeRefreshPollGeneration !== generation) return false;
+      clearTimeout(refreshPollTimer);
+      refreshPollTimer = 0;
       activeRefreshPollGeneration = 0;
       scheduleAccountPolling();
       return true;
+    }
+
+    function scheduleRefreshPolling(generation, attempt) {
+      clearTimeout(refreshPollTimer);
+      refreshPollTimer = setTimeout(() => {
+        refreshPollTimer = 0;
+        return pollRefreshStatus(generation, attempt + 1).catch(error => {
+          finishRefreshPolling(generation);
+          showError(error);
+        });
+      }, 2000);
     }
 
     function scheduleAccountPolling() {
@@ -974,7 +1021,7 @@
         if (accountResult.reason === "superseded" &&
           activeRefreshPollGeneration === generation &&
           attempt < 59) {
-          setTimeout(() => pollRefreshStatus(generation, attempt + 1).catch(showError), 2000);
+          scheduleRefreshPolling(generation, attempt);
           return;
         }
         finishRefreshPolling(generation);
@@ -982,7 +1029,7 @@
       }
       const active = accounts.some(account => ["queued", "refreshing"].includes(account.refresh?.state));
       if (active && attempt < 59) {
-        setTimeout(() => pollRefreshStatus(generation, attempt + 1).catch(showError), 2000);
+        scheduleRefreshPolling(generation, attempt);
         return;
       }
       finishRefreshPolling(generation);
@@ -999,11 +1046,18 @@
       if (requestGeneration < latestSuccessfulRefreshRequest) return;
       latestSuccessfulRefreshRequest = requestGeneration;
       const generation = ++refreshPollGeneration;
+      clearTimeout(refreshPollTimer);
+      refreshPollTimer = 0;
       clearTimeout(accountPollTimer);
       accountPollTimer = 0;
       activeRefreshPollGeneration = generation;
       $("connectionStatus").textContent = "额度刷新已排队";
-      await pollRefreshStatus(generation);
+      try {
+        await pollRefreshStatus(generation);
+      } catch (error) {
+        finishRefreshPolling(generation);
+        throw error;
+      }
     }
 
     function previewCandidateStatus(candidate) {
@@ -1137,10 +1191,9 @@
       if (document.hidden || !managementKey) return;
       const generation = activeRefreshPollGeneration;
       if (generation !== 0) {
-        refreshAccounts(generation).catch(showError);
-        return;
+        return refreshAccounts(generation).catch(showError);
       }
-      refreshAccounts().finally(scheduleAccountPolling);
+      return refreshAccounts().finally(scheduleAccountPolling);
     });
 
     if (managementKey) {
