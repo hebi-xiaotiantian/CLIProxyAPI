@@ -888,8 +888,10 @@
           api("/decisions")
         ]);
         if (!loadIsCurrent(sequence, generation)) return false;
-        const accountRequestCurrent = accountRequestIsCurrent(accountRequest);
-        if (accountResult.error && accountRequestCurrent) throw accountResult.error;
+        if (accountResult.error &&
+          accountRequest.sequence >= latestSuccessfulAccountRequest) {
+          throw accountResult.error;
+        }
         const accountsUpdated = !accountResult.error &&
           applyAccountsResponse(accountRequest, accountResult.accountData);
         decisions = decisionData.decisions || [];

@@ -823,6 +823,7 @@ func TestStaticResourceIncludesUsageDisplayAndPollingControls(t *testing.T) {
 		`role="status" aria-live="polite"`,
 		"refreshPollTimer",
 		"latestSuccessfulAccountRequest",
+		"accountRequest.sequence >= latestSuccessfulAccountRequest",
 		"error.preserveConnectionStatus = true",
 		"if (error.preserveConnectionStatus) return",
 		"const loaded = await load()",

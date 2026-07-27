@@ -375,6 +375,76 @@ test("connect does not close the dialog when its load becomes stale", async () =
   assert.equal(await newerLoad, true);
 });
 
+test("connect rejects an old account error while a newer account request is pending", async () => {
+  const harness = createHarness();
+  harness.element("keyInput").value = "test-key";
+
+  const connecting = harness.element("connectButton").onclick({
+    preventDefault() {}
+  });
+  const loadRequests = harness.pendingFetches.splice(0, 3);
+  const newerRefresh = harness.api.refreshAccounts();
+  const newerRequest = harness.pendingFetches.shift();
+
+  harness.resolve(loadRequests[0], { error: "old accounts failed" }, 500);
+  harness.resolve(loadRequests[1], profile("paid-first"));
+  harness.resolve(loadRequests[2], { decisions: [] });
+  await connecting;
+
+  assert.deepEqual(harness.alerts, ["old accounts failed"]);
+  assert.equal(harness.element("keyDialog").closeCalls, 0);
+
+  harness.resolve(newerRequest, { accounts: [account("new-account")] });
+  assert.equal(await newerRefresh, true);
+});
+
+test("connect rejects an old account error after the newer account request fails", async () => {
+  const harness = createHarness();
+  harness.element("keyInput").value = "test-key";
+
+  const connecting = harness.element("connectButton").onclick({
+    preventDefault() {}
+  });
+  const loadRequests = harness.pendingFetches.splice(0, 3);
+  const newerRefresh = harness.api.refreshAccounts();
+  const newerRequest = harness.pendingFetches.shift();
+
+  harness.resolve(newerRequest, { error: "new accounts failed" }, 500);
+  assert.equal(await newerRefresh, false);
+  harness.resolve(loadRequests[0], { error: "old accounts failed" }, 500);
+  harness.resolve(loadRequests[1], profile("paid-first"));
+  harness.resolve(loadRequests[2], { decisions: [] });
+  await connecting;
+
+  assert.deepEqual(harness.alerts, ["old accounts failed"]);
+  assert.equal(harness.element("keyDialog").closeCalls, 0);
+});
+
+test("connect may ignore an old account error after a newer account request succeeds", async () => {
+  const harness = createHarness();
+  harness.element("keyInput").value = "test-key";
+
+  const connecting = harness.element("connectButton").onclick({
+    preventDefault() {}
+  });
+  const loadRequests = harness.pendingFetches.splice(0, 3);
+  const newerRefresh = harness.api.refreshAccounts();
+  const newerRequest = harness.pendingFetches.shift();
+
+  harness.resolve(newerRequest, { accounts: [account("new-account")] });
+  assert.equal(await newerRefresh, true);
+  harness.resolve(loadRequests[0], { error: "old accounts failed" }, 500);
+  harness.resolve(loadRequests[1], profile("paid-first"));
+  harness.resolve(loadRequests[2], { decisions: [] });
+  await connecting;
+
+  assert.deepEqual(harness.alerts, []);
+  assert.equal(harness.element("keyDialog").closeCalls, 1);
+  assert.equal(harness.api.state().accounts[0].id, "new-account");
+  assert.equal(harness.api.state().connectionText, "已连接");
+  assert.equal(harness.api.state().connectionClass, "status success");
+});
+
 test("latest load still applies profile and decisions when accounts are superseded", async () => {
   const harness = createHarness();
   harness.api.setKey("test-key");
