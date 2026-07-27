@@ -21,6 +21,8 @@ type lifecycleRequest struct {
 type accountPoolPlugin struct {
 	host           hostCaller
 	selector       *selector
+	decisions      *decisionRing
+	decisionsMu    sync.RWMutex
 	lifecycleMu    sync.Mutex
 	configMu       sync.RWMutex
 	config         Config
@@ -43,6 +45,7 @@ func newAccountPoolPlugin(host hostCaller) *accountPoolPlugin {
 	plugin := &accountPoolPlugin{
 		host:           host,
 		selector:       newSelector(time.Now),
+		decisions:      newDecisionRing(maxRecentDecisions),
 		config:         defaultConfig(),
 		delayedRefresh: make(map[string]*time.Timer),
 	}
@@ -97,6 +100,8 @@ func (p *accountPoolPlugin) configure(raw []byte) error {
 	}, p.applyRefreshResult)
 	coordinator.setStateCallback(p.applyRefreshState)
 
+	p.decisionsMu.Lock()
+	p.selector = newSelector(time.Now)
 	p.configMu.Lock()
 	p.config = cfg
 	p.store = store
@@ -104,6 +109,8 @@ func (p *accountPoolPlugin) configure(raw []byte) error {
 	p.quota.Store(&quota)
 	p.coordinator = coordinator
 	p.configMu.Unlock()
+	p.decisions.clear()
+	p.decisionsMu.Unlock()
 	p.quotaMu.Unlock()
 	p.policyMu.Unlock()
 
@@ -144,14 +151,38 @@ func (p *accountPoolPlugin) pick(raw []byte) ([]byte, error) {
 	if errUnmarshal := json.Unmarshal(raw, &request); errUnmarshal != nil {
 		return nil, fmt.Errorf("decode scheduler request: %w", errUnmarshal)
 	}
+	p.decisionsMu.RLock()
+	defer p.decisionsMu.RUnlock()
 	p.configMu.RLock()
 	cfg := p.config
 	p.configMu.RUnlock()
-	response, errPick := p.selector.pick(request, *p.policy.Load(), *p.quota.Load(), cfg)
+	response, analysis, errPick := p.selector.pickWithAnalysis(request, *p.policy.Load(), *p.quota.Load(), cfg)
 	if errPick != nil {
 		return errorEnvelope("codex_account_pool_unavailable", errPick.Error(), true, 503), nil
 	}
+	if response.Handled && response.AuthID != "" {
+		layer := "regular"
+		if len(analysis.Group) > 0 && analysis.Group[0].Backup {
+			layer = "backup"
+		}
+		p.decisions.add(schedulingDecision{
+			Timestamp:      analysis.Timestamp,
+			Model:          sanitizeText(request.Model),
+			AuthID:         response.AuthID,
+			Profile:        analysis.Profile,
+			Layer:          layer,
+			CandidateCount: analysis.CandidateCount,
+			EligibleCount:  len(analysis.Eligible),
+			GroupSize:      len(analysis.Group),
+		})
+	}
 	return okEnvelope(response)
+}
+
+func (p *accountPoolPlugin) decisionSnapshot() []schedulingDecision {
+	p.decisionsMu.RLock()
+	defer p.decisionsMu.RUnlock()
+	return p.decisions.snapshot()
 }
 
 func (p *accountPoolPlugin) handleUsage(raw []byte) ([]byte, error) {

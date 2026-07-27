@@ -41,6 +41,32 @@ type selectionCandidate struct {
 	QuotaKnown bool
 }
 
+type analyzedCandidate struct {
+	Candidate     pluginapi.SchedulerAuthCandidate
+	Policy        AccountPolicy
+	Snapshot      QuotaSnapshot
+	Selection     selectionCandidate
+	Eligible      bool
+	Reason        string
+	HostAvailable bool
+	QuotaEligible bool
+	InActiveLayer bool
+	InActiveGroup bool
+}
+
+type selectionAnalysis struct {
+	Timestamp      time.Time
+	Profile        RouteProfile
+	CandidateCount int
+	HostAvailable  int
+	QuotaEligible  int
+	Candidates     []analyzedCandidate
+	Eligible       []selectionCandidate
+	Layer          []selectionCandidate
+	Group          []selectionCandidate
+	Excluded       map[string]int
+}
+
 func newSelector(now func() time.Time) *selector {
 	if now == nil {
 		now = time.Now
@@ -71,53 +97,98 @@ func (s *selector) clone() *selector {
 }
 
 func (s *selector) pick(req pluginapi.SchedulerPickRequest, policy PolicyDocument, quota QuotaDocument, cfg Config) (pluginapi.SchedulerPickResponse, error) {
-	codexCandidates := make([]pluginapi.SchedulerAuthCandidate, 0, len(req.Candidates))
-	for _, candidate := range req.Candidates {
-		if strings.EqualFold(strings.TrimSpace(candidate.Provider), "codex") {
-			codexCandidates = append(codexCandidates, candidate)
-		}
-	}
-	if len(codexCandidates) == 0 {
-		return pluginapi.SchedulerPickResponse{Handled: false}, nil
-	}
+	response, _, err := s.pickWithAnalysis(req, policy, quota, cfg)
+	return response, err
+}
 
+func (s *selector) pickWithAnalysis(req pluginapi.SchedulerPickRequest, policy PolicyDocument, quota QuotaDocument, cfg Config) (pluginapi.SchedulerPickResponse, selectionAnalysis, error) {
 	now := s.now()
-	profile := effectiveProfile(policy, now)
-	eligible := make([]selectionCandidate, 0, len(codexCandidates))
-	for _, candidate := range codexCandidates {
-		accountPolicy, ok := policy.Accounts[candidate.ID]
-		if !ok {
-			accountPolicy = defaultAccountPolicy(candidate.Priority)
-		}
-		item, ok := classifyCandidate(candidate, accountPolicy, quota.Accounts[candidate.ID], profile, policy.CustomPlanOrder, cfg, now)
-		if ok {
-			eligible = append(eligible, item)
-		}
+	analysis := analyzeSelection(req, policy, quota, cfg, now)
+	if analysis.CandidateCount == 0 {
+		return pluginapi.SchedulerPickResponse{Handled: false}, analysis, nil
 	}
-	if len(eligible) == 0 {
-		return pluginapi.SchedulerPickResponse{}, fmt.Errorf("codex account pool has no eligible account")
+	if len(analysis.Eligible) == 0 {
+		return pluginapi.SchedulerPickResponse{}, analysis, fmt.Errorf("codex account pool has no eligible account")
 	}
-
-	group := selectionGroup(profile, eligible)
+	group := analysis.Group
 	if len(group) == 0 {
-		return pluginapi.SchedulerPickResponse{}, fmt.Errorf("codex account pool has no selectable account")
+		return pluginapi.SchedulerPickResponse{}, analysis, fmt.Errorf("codex account pool has no selectable account")
 	}
 	sessionKey := schedulerSessionKey(req.Options.Headers, req.Options.Metadata)
 	if sessionKey != "" {
 		if authID := s.affinityHit(sessionKey, policy.Revision, group, now, cfg.AffinityTTL); authID != "" {
-			return pluginapi.SchedulerPickResponse{Handled: true, AuthID: authID}, nil
+			return pluginapi.SchedulerPickResponse{Handled: true, AuthID: authID}, analysis, nil
 		}
 	}
 	authID := ""
-	if isAutomaticProfile(profile) {
-		authID = s.equalPick(policy.Revision, profile, group)
+	if isAutomaticProfile(analysis.Profile) {
+		authID = s.equalPick(policy.Revision, analysis.Profile, group)
 	} else {
-		authID = s.weightedPick(policy.Revision, profile, group)
+		authID = s.weightedPick(policy.Revision, analysis.Profile, group)
 	}
 	if sessionKey != "" {
 		s.bindAffinity(sessionKey, authID, policy.Revision, now.Add(cfg.AffinityTTL))
 	}
-	return pluginapi.SchedulerPickResponse{Handled: true, AuthID: authID}, nil
+	return pluginapi.SchedulerPickResponse{Handled: true, AuthID: authID}, analysis, nil
+}
+
+func analyzeSelection(req pluginapi.SchedulerPickRequest, policy PolicyDocument, quota QuotaDocument, cfg Config, now time.Time) selectionAnalysis {
+	analysis := selectionAnalysis{
+		Timestamp: now.UTC(),
+		Profile:   effectiveProfile(policy, now),
+		Excluded:  make(map[string]int),
+	}
+	for _, candidate := range req.Candidates {
+		if !strings.EqualFold(strings.TrimSpace(candidate.Provider), "codex") {
+			continue
+		}
+		analysis.CandidateCount++
+		accountPolicy, ok := policy.Accounts[candidate.ID]
+		if !ok {
+			accountPolicy = defaultAccountPolicy(candidate.Priority)
+		}
+		analyzed := classifyCandidateDetailed(
+			candidate,
+			accountPolicy,
+			quota.Accounts[candidate.ID],
+			analysis.Profile,
+			policy.CustomPlanOrder,
+			cfg,
+			now,
+		)
+		if analyzed.HostAvailable {
+			analysis.HostAvailable++
+		}
+		if analyzed.QuotaEligible {
+			analysis.QuotaEligible++
+		}
+		if analyzed.Eligible {
+			analysis.Eligible = append(analysis.Eligible, analyzed.Selection)
+		} else if analyzed.Reason != "" {
+			analysis.Excluded[analyzed.Reason]++
+		}
+		analysis.Candidates = append(analysis.Candidates, analyzed)
+	}
+	if len(analysis.Eligible) == 0 {
+		return analysis
+	}
+	analysis.Layer = activeLayer(analysis.Eligible)
+	analysis.Group = selectionGroup(analysis.Profile, analysis.Eligible)
+	layerIDs := selectionIDSet(analysis.Layer)
+	groupIDs := selectionIDSet(analysis.Group)
+	for index := range analysis.Candidates {
+		analysis.Candidates[index].InActiveLayer = layerIDs[analysis.Candidates[index].Candidate.ID]
+		analysis.Candidates[index].InActiveGroup = groupIDs[analysis.Candidates[index].Candidate.ID]
+	}
+	return analysis
+}
+
+func selectionIDSet(candidates []selectionCandidate) map[string]bool {
+	ids := make(map[string]bool, len(candidates))
+	for _, candidate := range candidates {
+		ids[candidate.ID] = true
+	}
+	return ids
 }
 
 func classifyCandidate(candidate pluginapi.SchedulerAuthCandidate, policy AccountPolicy, snapshot QuotaSnapshot, profile RouteProfile, customOrder []PlanKind, cfg Config, now time.Time) (selectionCandidate, bool) {
@@ -126,14 +197,11 @@ func classifyCandidate(candidate pluginapi.SchedulerAuthCandidate, policy Accoun
 }
 
 func classifyCandidateWithReason(candidate pluginapi.SchedulerAuthCandidate, policy AccountPolicy, snapshot QuotaSnapshot, profile RouteProfile, customOrder []PlanKind, cfg Config, now time.Time) (selectionCandidate, bool, string) {
-	if !policy.Enabled {
-		return selectionCandidate{}, false, "plugin_disabled"
-	}
-	status := strings.ToLower(strings.TrimSpace(candidate.Status))
-	if status == "disabled" || status == "unavailable" || status == "error" {
-		return selectionCandidate{}, false, "host_" + status
-	}
+	analyzed := classifyCandidateDetailed(candidate, policy, snapshot, profile, customOrder, cfg, now)
+	return analyzed.Selection, analyzed.Eligible, analyzed.Reason
+}
 
+func classifyCandidateDetailed(candidate pluginapi.SchedulerAuthCandidate, policy AccountPolicy, snapshot QuotaSnapshot, profile RouteProfile, customOrder []PlanKind, cfg Config, now time.Time) analyzedCandidate {
 	plan := policy.PlanOverride
 	if plan == "" {
 		plan = snapshot.Plan
@@ -141,45 +209,73 @@ func classifyCandidateWithReason(candidate pluginapi.SchedulerAuthCandidate, pol
 	if !validPlan(plan) {
 		plan = PlanUnknown
 	}
+	rank, rankKnown := planRank(snapshot.PlanType)
+	if !rankKnown && plan == PlanFree {
+		rank, rankKnown = planRank(string(PlanFree))
+	}
+	score, scoreKnown := quotaScore(snapshot)
+	analyzed := analyzedCandidate{
+		Candidate:     candidate,
+		Policy:        policy,
+		Snapshot:      snapshot,
+		HostAvailable: hostCandidateAvailable(candidate),
+		Selection: selectionCandidate{
+			ID:         candidate.ID,
+			Policy:     policy,
+			Plan:       plan,
+			Backup:     policy.Backup,
+			Priority:   policy.Priority,
+			PlanRank:   rank,
+			PlanKnown:  rankKnown,
+			QuotaScore: score,
+			QuotaKnown: scoreKnown,
+		},
+	}
+	if !policy.Enabled {
+		analyzed.Reason = "plugin_disabled"
+		return analyzed
+	}
+	status := strings.ToLower(strings.TrimSpace(candidate.Status))
+	if status == "disabled" || status == "unavailable" || status == "error" {
+		analyzed.Reason = "host_" + status
+		return analyzed
+	}
+
 	hasQuotaWindow := snapshot.FiveHourWindowPresent || snapshot.WeeklyWindowPresent
 	fresh := hasQuotaWindow && !snapshot.RefreshedAt.IsZero() && now.Sub(snapshot.RefreshedAt) <= cfg.SnapshotMaxAge
 	if !fresh && cfg.StalePolicy == StaleExclude {
-		return selectionCandidate{}, false, "quota_stale"
+		analyzed.Reason = "quota_stale"
+		return analyzed
 	}
 	if fresh {
 		if snapshot.FiveHourWindowPresent && snapshot.FiveHourRemaining < policy.FiveHourReserve {
-			return selectionCandidate{}, false, "five_hour_reserve"
+			analyzed.Reason = "five_hour_reserve"
+			return analyzed
 		}
 		if snapshot.WeeklyWindowPresent && snapshot.WeeklyRemaining < policy.WeeklyReserve {
-			return selectionCandidate{}, false, "weekly_reserve"
+			analyzed.Reason = "weekly_reserve"
+			return analyzed
 		}
 	}
+	analyzed.QuotaEligible = true
 
 	tier := 0
 	if !isAutomaticProfile(profile) {
 		var ok bool
 		tier, ok = profileTier(profile, plan, policy.Backup, customOrder)
 		if !ok {
-			return selectionCandidate{}, false, "profile_excluded"
+			analyzed.Reason = "profile_excluded"
+			return analyzed
 		}
 	}
-	rank, rankKnown := planRank(snapshot.PlanType)
-	if !rankKnown && plan == PlanFree {
-		rank, rankKnown = planRank(string(PlanFree))
-	}
-	score, scoreKnown := quotaScore(snapshot)
-	return selectionCandidate{
-		ID:         candidate.ID,
-		Policy:     policy,
-		Plan:       plan,
-		Backup:     policy.Backup,
-		Tier:       tier,
-		Priority:   policy.Priority,
-		PlanRank:   rank,
-		PlanKnown:  rankKnown,
-		QuotaScore: score,
-		QuotaKnown: scoreKnown,
-	}, true, ""
+	analyzed.Selection.Tier = tier
+	analyzed.Eligible = true
+	return analyzed
+}
+
+func hostCandidateAvailable(candidate pluginapi.SchedulerAuthCandidate) bool {
+	status := strings.ToLower(strings.TrimSpace(candidate.Status))
+	return status != "disabled" && status != "unavailable" && status != "error"
 }
 
 func profileTier(profile RouteProfile, plan PlanKind, backup bool, customOrder []PlanKind) (int, bool) {

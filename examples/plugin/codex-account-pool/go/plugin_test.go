@@ -53,6 +53,9 @@ func TestPluginRegistrationDeclaresRequiredCapabilities(t *testing.T) {
 	if registration.SchemaVersion != pluginabi.SchemaVersion || registration.Metadata.Name != pluginID {
 		t.Fatalf("registration = %#v", registration)
 	}
+	if registration.Metadata.Version != "0.2.0" {
+		t.Fatalf("registration version = %q, want 0.2.0", registration.Metadata.Version)
+	}
 }
 
 func TestSafeCallConvertsPanicToErrorEnvelope(t *testing.T) {
@@ -81,6 +84,7 @@ func TestManagementRegistrationUsesExactRoutes(t *testing.T) {
 		"PUT /codex-account-pool/profile":    false,
 		"POST /codex-account-pool/refresh":   false,
 		"POST /codex-account-pool/preview":   false,
+		"GET /codex-account-pool/decisions":  false,
 	}
 	for _, route := range got.Routes {
 		key := route.Method + " " + route.Path
@@ -92,6 +96,118 @@ func TestManagementRegistrationUsesExactRoutes(t *testing.T) {
 		if !found {
 			t.Fatalf("missing management route %s", route)
 		}
+	}
+}
+
+func TestPluginPickRecordsRealSchedulingDecision(t *testing.T) {
+	plugin := newTestPlugin(t)
+	now := time.Now()
+	plugin.policy.Store(&PolicyDocument{
+		Version:       stateVersion,
+		Revision:      1,
+		ActiveProfile: ProfileQuotaLowFirst,
+		Accounts: map[string]AccountPolicy{
+			"a": {Enabled: true, Priority: 100, Weight: 1},
+			"b": {Enabled: true, Priority: 100, Weight: 1},
+		},
+	})
+	plugin.quota.Store(&QuotaDocument{
+		Version: stateVersion,
+		Accounts: map[string]QuotaSnapshot{
+			"a": {
+				AuthID: "a", Plan: PlanPaid, PlanType: "plus",
+				FiveHourRemaining: 20, WeeklyRemaining: 20,
+				FiveHourWindowPresent: true, WeeklyWindowPresent: true, RefreshedAt: now,
+			},
+			"b": {
+				AuthID: "b", Plan: PlanPaid, PlanType: "plus",
+				FiveHourRemaining: 40, WeeklyRemaining: 40,
+				FiveHourWindowPresent: true, WeeklyWindowPresent: true, RefreshedAt: now,
+			},
+		},
+	})
+	request := codexRequest("a", "b")
+	request.Model = "gpt-5.4"
+	raw, errMarshal := json.Marshal(request)
+	if errMarshal != nil {
+		t.Fatalf("marshal scheduler request: %v", errMarshal)
+	}
+
+	if _, errPick := plugin.pick(raw); errPick != nil {
+		t.Fatalf("plugin pick() error = %v", errPick)
+	}
+	got := plugin.decisions.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("decisions = %#v, want one", got)
+	}
+	decision := got[0]
+	if decision.AuthID != "a" || decision.Model != "gpt-5.4" ||
+		decision.Profile != ProfileQuotaLowFirst || decision.Layer != "regular" ||
+		decision.CandidateCount != 2 || decision.EligibleCount != 2 || decision.GroupSize != 1 ||
+		decision.Timestamp.IsZero() {
+		t.Fatalf("decision = %#v", decision)
+	}
+}
+
+func TestPluginPickBoundsDecisionModelLength(t *testing.T) {
+	plugin := newTestPlugin(t)
+	plugin.policy.Store(&PolicyDocument{
+		Version:       stateVersion,
+		Revision:      1,
+		ActiveProfile: ProfilePaidFirst,
+		Accounts: map[string]AccountPolicy{
+			"a": {Enabled: true, Priority: 100, Weight: 1},
+		},
+	})
+	request := codexRequest("a")
+	request.Model = strings.Repeat("x", 500)
+	raw, errMarshal := json.Marshal(request)
+	if errMarshal != nil {
+		t.Fatalf("marshal scheduler request: %v", errMarshal)
+	}
+
+	if _, errPick := plugin.pick(raw); errPick != nil {
+		t.Fatalf("plugin pick() error = %v", errPick)
+	}
+	got := plugin.decisions.snapshot()
+	if len(got) != 1 || len(got[0].Model) != 300 {
+		t.Fatalf("decision model length = %d, want 300", len(got[0].Model))
+	}
+}
+
+func TestConfigureClearsDecisionHistory(t *testing.T) {
+	host := &fakeHostCaller{results: map[string]json.RawMessage{
+		pluginabi.MethodHostAuthList: mustJSON(t, authListResponse{}),
+	}}
+	plugin := newAccountPoolPlugin(host)
+	oldSelector := plugin.selector
+	plugin.selector.affinity["old-session"] = affinityEntry{
+		AuthID:    "old-auth",
+		Revision:  1,
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	plugin.decisions.add(schedulingDecision{
+		Timestamp: time.Now(),
+		AuthID:    "old-auth",
+		Profile:   ProfilePaidFirst,
+		Layer:     "regular",
+	})
+	request, errMarshal := json.Marshal(lifecycleRequest{
+		ConfigYAML: []byte("state_dir: " + t.TempDir() + "\nrefresh_interval: 1h\n"),
+	})
+	if errMarshal != nil {
+		t.Fatalf("marshal lifecycle request: %v", errMarshal)
+	}
+
+	if errConfigure := plugin.configure(request); errConfigure != nil {
+		t.Fatalf("configure() error = %v", errConfigure)
+	}
+	defer plugin.shutdown()
+	if got := plugin.decisions.snapshot(); len(got) != 0 {
+		t.Fatalf("decisions after configure = %#v, want empty", got)
+	}
+	if plugin.selector == oldSelector || len(plugin.selector.affinity) != 0 {
+		t.Fatalf("selector runtime state survived configure: %#v", plugin.selector.affinity)
 	}
 }
 

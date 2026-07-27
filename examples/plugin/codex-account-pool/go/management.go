@@ -89,14 +89,49 @@ type accountView struct {
 }
 
 type previewCandidateView struct {
-	ID       string   `json:"id"`
-	Eligible bool     `json:"eligible"`
-	Reason   string   `json:"reason,omitempty"`
-	Layer    string   `json:"layer"`
-	Plan     PlanKind `json:"plan"`
-	Tier     int      `json:"tier"`
-	Priority int      `json:"priority"`
-	Weight   int      `json:"weight"`
+	ID            string   `json:"id"`
+	Label         string   `json:"label,omitempty"`
+	Eligible      bool     `json:"eligible"`
+	Reason        string   `json:"reason,omitempty"`
+	ReasonLabel   string   `json:"reason_label,omitempty"`
+	Layer         string   `json:"layer"`
+	Plan          PlanKind `json:"plan"`
+	PlanType      string   `json:"plan_type,omitempty"`
+	Tier          int      `json:"tier"`
+	Priority      int      `json:"priority"`
+	Weight        int      `json:"weight"`
+	PlanRank      int      `json:"plan_rank"`
+	PlanKnown     bool     `json:"plan_known"`
+	QuotaScore    int      `json:"quota_score"`
+	QuotaKnown    bool     `json:"quota_known"`
+	InActiveLayer bool     `json:"in_active_layer"`
+	InActiveGroup bool     `json:"in_active_group"`
+}
+
+type previewFunnelView struct {
+	Candidates    int `json:"candidates"`
+	HostAvailable int `json:"host_available"`
+	QuotaEligible int `json:"quota_eligible"`
+	ActiveLayer   int `json:"active_layer"`
+	StrategyGroup int `json:"strategy_group"`
+}
+
+type previewExclusionView struct {
+	Reason string `json:"reason"`
+	Label  string `json:"label"`
+	Count  int    `json:"count"`
+}
+
+type previewSelectedAccountView struct {
+	ID         string   `json:"id"`
+	Label      string   `json:"label,omitempty"`
+	Layer      string   `json:"layer"`
+	Plan       PlanKind `json:"plan"`
+	PlanType   string   `json:"plan_type,omitempty"`
+	PlanRank   int      `json:"plan_rank"`
+	PlanKnown  bool     `json:"plan_known"`
+	QuotaScore int      `json:"quota_score"`
+	QuotaKnown bool     `json:"quota_known"`
 }
 
 func managementRegistration() managementRegistrationResponse {
@@ -109,6 +144,7 @@ func managementRegistration() managementRegistrationResponse {
 			{Method: http.MethodPut, Path: "/codex-account-pool/profile"},
 			{Method: http.MethodPost, Path: "/codex-account-pool/refresh"},
 			{Method: http.MethodPost, Path: "/codex-account-pool/preview"},
+			{Method: http.MethodGet, Path: "/codex-account-pool/decisions"},
 		},
 		Resources: []managementResourceDeclaration{{
 			Path:        "/pool",
@@ -175,6 +211,10 @@ func (p *accountPoolPlugin) managementResponse(request managementRequest) (plugi
 			if errClear := p.clearTemporaryProfile(); errClear != nil {
 				return pluginapi.ManagementResponse{}, errClear
 			}
+		} else if input.Profile == "" && len(input.CustomPlanOrder) > 0 {
+			if errSet := p.setCustomPlanOrder(input.CustomPlanOrder); errSet != nil {
+				return pluginapi.ManagementResponse{}, errSet
+			}
 		} else {
 			var expiresAt *time.Time
 			if input.DurationMinutes > 0 {
@@ -216,6 +256,8 @@ func (p *accountPoolPlugin) managementResponse(request managementRequest) (plugi
 			return jsonManagementResponse(http.StatusConflict, map[string]any{"error": sanitizeText(errPreview.Error())}), nil
 		}
 		return jsonManagementResponse(http.StatusOK, preview), nil
+	case method == http.MethodGet && strings.HasSuffix(path, "/codex-account-pool/decisions"):
+		return jsonManagementResponse(http.StatusOK, map[string]any{"decisions": p.decisionSnapshot()}), nil
 	default:
 		return jsonManagementResponse(http.StatusNotFound, map[string]any{"error": "not_found"}), nil
 	}
@@ -396,6 +438,18 @@ func (p *accountPoolPlugin) setProfileWithOrder(profile RouteProfile, expiresAt 
 	return p.persistPolicy(next)
 }
 
+func (p *accountPoolPlugin) setCustomPlanOrder(customOrder []PlanKind) error {
+	normalizedOrder, errOrder := normalizePlanOrder(customOrder)
+	if errOrder != nil {
+		return errOrder
+	}
+	p.policyMu.Lock()
+	defer p.policyMu.Unlock()
+	next := clonePolicyDocument(*p.policy.Load())
+	next.CustomPlanOrder = normalizedOrder
+	return p.persistPolicy(next)
+}
+
 func (p *accountPoolPlugin) clearTemporaryProfile() error {
 	p.policyMu.Lock()
 	defer p.policyMu.Unlock()
@@ -462,7 +516,10 @@ func (p *accountPoolPlugin) preview(model, sessionID string) (map[string]any, er
 		headers.Set("X-Session-ID", sessionID)
 		request.Options.Headers = headers
 	}
-	for _, account := range p.inventorySnapshot() {
+	accounts := p.inventorySnapshot()
+	accountByID := make(map[string]pluginapi.HostAuthFileEntry, len(accounts))
+	for _, account := range accounts {
+		accountByID[account.ID] = account
 		status := account.Status
 		if account.Disabled {
 			status = "disabled"
@@ -478,92 +535,172 @@ func (p *accountPoolPlugin) preview(model, sessionID string) (map[string]any, er
 			Status:   status,
 		})
 	}
+	p.decisionsMu.RLock()
 	p.configMu.RLock()
 	cfg := p.config
 	p.configMu.RUnlock()
 	policy := *p.policy.Load()
 	quota := *p.quota.Load()
+	previewSelector := p.selector.clone()
+	p.decisionsMu.RUnlock()
 	now := time.Now()
-	profile := effectiveProfile(policy, now)
-	eligible := make([]selectionCandidate, 0, len(request.Candidates))
-	candidates := make([]previewCandidateView, 0, len(request.Candidates))
-	for _, candidate := range request.Candidates {
-		accountPolicy, ok := policy.Accounts[candidate.ID]
-		if !ok {
-			accountPolicy = defaultAccountPolicy(candidate.Priority)
-		}
-		item, selectable, reason := classifyCandidateWithReason(
-			candidate,
-			accountPolicy,
-			quota.Accounts[candidate.ID],
-			profile,
-			policy.CustomPlanOrder,
-			cfg,
-			now,
-		)
-		plan := accountPolicy.PlanOverride
-		if plan == "" {
-			plan = quota.Accounts[candidate.ID].Plan
-		}
-		if !validPlan(plan) {
-			plan = PlanUnknown
+	analysis := analyzeSelection(request, policy, quota, cfg, now)
+	if len(analysis.Eligible) == 0 {
+		return nil, fmt.Errorf("codex account pool has no eligible account")
+	}
+	candidates := make([]previewCandidateView, 0, len(analysis.Candidates))
+	for _, analyzed := range analysis.Candidates {
+		account := accountByID[analyzed.Candidate.ID]
+		item := analyzed.Selection
+		planType := strings.TrimSpace(analyzed.Snapshot.PlanType)
+		if planType == "" {
+			planType = string(item.Plan)
 		}
 		view := previewCandidateView{
-			ID:       candidate.ID,
-			Eligible: selectable,
-			Reason:   reason,
-			Layer:    "regular",
-			Plan:     plan,
-			Priority: accountPolicy.Priority,
-			Weight:   accountPolicy.Weight,
+			ID:            analyzed.Candidate.ID,
+			Label:         account.Label,
+			Eligible:      analyzed.Eligible,
+			Reason:        analyzed.Reason,
+			ReasonLabel:   previewReasonLabel(analyzed.Reason),
+			Layer:         "regular",
+			Plan:          item.Plan,
+			PlanType:      planType,
+			Tier:          item.Tier,
+			Priority:      item.Priority,
+			Weight:        item.Policy.Weight,
+			PlanRank:      item.PlanRank,
+			PlanKnown:     item.PlanKnown,
+			QuotaScore:    item.QuotaScore,
+			QuotaKnown:    item.QuotaKnown,
+			InActiveLayer: analyzed.InActiveLayer,
+			InActiveGroup: analyzed.InActiveGroup,
 		}
-		if accountPolicy.Backup {
+		if item.Backup {
 			view.Layer = "backup"
-		}
-		if selectable {
-			view.Tier = item.Tier
-			eligible = append(eligible, item)
 		}
 		candidates = append(candidates, view)
 	}
 	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].InActiveGroup != candidates[j].InActiveGroup {
+			return candidates[i].InActiveGroup
+		}
+		if candidates[i].InActiveLayer != candidates[j].InActiveLayer {
+			return candidates[i].InActiveLayer
+		}
 		if candidates[i].Eligible != candidates[j].Eligible {
 			return candidates[i].Eligible
 		}
 		if candidates[i].Layer != candidates[j].Layer {
 			return candidates[i].Layer == "regular"
 		}
-		if candidates[i].Tier != candidates[j].Tier {
-			return candidates[i].Tier > candidates[j].Tier
-		}
-		if candidates[i].Priority != candidates[j].Priority {
-			return candidates[i].Priority > candidates[j].Priority
+		if isAutomaticProfile(analysis.Profile) {
+			left := selectionCandidate{
+				PlanRank: candidates[i].PlanRank, PlanKnown: candidates[i].PlanKnown,
+				QuotaScore: candidates[i].QuotaScore, QuotaKnown: candidates[i].QuotaKnown,
+			}
+			right := selectionCandidate{
+				PlanRank: candidates[j].PlanRank, PlanKnown: candidates[j].PlanKnown,
+				QuotaScore: candidates[j].QuotaScore, QuotaKnown: candidates[j].QuotaKnown,
+			}
+			if compared := compareAutomaticCandidate(analysis.Profile, left, right); compared != 0 {
+				return compared < 0
+			}
+		} else {
+			if candidates[i].Tier != candidates[j].Tier {
+				return candidates[i].Tier > candidates[j].Tier
+			}
+			if candidates[i].Priority != candidates[j].Priority {
+				return candidates[i].Priority > candidates[j].Priority
+			}
 		}
 		return candidates[i].ID < candidates[j].ID
 	})
-	if len(eligible) == 0 {
-		return nil, fmt.Errorf("codex account pool has no eligible account")
-	}
-	group := strictGroup(eligible)
+	group := analysis.Group
 	groupIDs := make([]string, 0, len(group))
 	for _, candidate := range group {
 		groupIDs = append(groupIDs, candidate.ID)
 	}
-	previewSelector := p.selector.clone()
 	response, errPick := previewSelector.pick(request, policy, quota, cfg)
 	if errPick != nil {
 		return nil, errPick
 	}
+	var selectedAccount previewSelectedAccountView
+	for _, candidate := range candidates {
+		if candidate.ID != response.AuthID {
+			continue
+		}
+		selectedAccount = previewSelectedAccountView{
+			ID:         candidate.ID,
+			Label:      candidate.Label,
+			Layer:      candidate.Layer,
+			Plan:       candidate.Plan,
+			PlanType:   candidate.PlanType,
+			PlanRank:   candidate.PlanRank,
+			PlanKnown:  candidate.PlanKnown,
+			QuotaScore: candidate.QuotaScore,
+			QuotaKnown: candidate.QuotaKnown,
+		}
+		break
+	}
+	exclusions := make([]previewExclusionView, 0, len(analysis.Excluded))
+	for reason, count := range analysis.Excluded {
+		exclusions = append(exclusions, previewExclusionView{
+			Reason: reason,
+			Label:  previewReasonLabel(reason),
+			Count:  count,
+		})
+	}
+	sort.Slice(exclusions, func(i, j int) bool {
+		if exclusions[i].Count != exclusions[j].Count {
+			return exclusions[i].Count > exclusions[j].Count
+		}
+		return exclusions[i].Reason < exclusions[j].Reason
+	})
 	return map[string]any{
-		"profile":         profile,
-		"selected_auth":   response.AuthID,
-		"candidate_count": len(request.Candidates),
-		"active_layer":    map[bool]string{true: "backup", false: "regular"}[group[0].Backup],
-		"active_tier":     group[0].Tier,
-		"active_priority": group[0].Priority,
-		"selection_group": groupIDs,
-		"candidates":      candidates,
+		"profile":          analysis.Profile,
+		"automatic":        isAutomaticProfile(analysis.Profile),
+		"scope":            "inventory",
+		"model":            request.Model,
+		"selected_auth":    response.AuthID,
+		"selected_account": selectedAccount,
+		"candidate_count":  len(request.Candidates),
+		"active_layer":     map[bool]string{true: "backup", false: "regular"}[group[0].Backup],
+		"active_tier":      group[0].Tier,
+		"active_priority":  group[0].Priority,
+		"selection_group":  groupIDs,
+		"funnel": previewFunnelView{
+			Candidates:    analysis.CandidateCount,
+			HostAvailable: analysis.HostAvailable,
+			QuotaEligible: analysis.QuotaEligible,
+			ActiveLayer:   len(analysis.Layer),
+			StrategyGroup: len(group),
+		},
+		"exclusions": exclusions,
+		"candidates": candidates,
 	}, nil
+}
+
+func previewReasonLabel(reason string) string {
+	switch reason {
+	case "plugin_disabled":
+		return "Disabled by plugin policy"
+	case "host_disabled":
+		return "Disabled by host"
+	case "host_unavailable":
+		return "Unavailable in host"
+	case "host_error":
+		return "Host account error"
+	case "quota_stale":
+		return "Quota snapshot is stale"
+	case "five_hour_reserve":
+		return "Below five-hour reserve"
+	case "weekly_reserve":
+		return "Below weekly reserve"
+	case "profile_excluded":
+		return "Excluded by strict profile"
+	default:
+		return ""
+	}
 }
 
 func (p *accountPoolPlugin) profileView() map[string]any {
@@ -588,7 +725,7 @@ func (p *accountPoolPlugin) statusView() map[string]any {
 	p.configMu.RUnlock()
 	return map[string]any{
 		"plugin":            pluginID,
-		"version":           "0.1.0",
+		"version":           pluginVersion,
 		"accounts":          len(p.inventorySnapshot()),
 		"effective_profile": effectiveProfile(*p.policy.Load(), time.Now()),
 		"refresh_interval":  cfg.RefreshInterval.String(),

@@ -59,16 +59,16 @@
 
 ## 9. Automatic Routing Modes
 
-- [ ] 9.1 Add failing scheduler tests for `auto`, quota high/low, plan high/low, unknown metrics, reserve-before-ordering, exact ties, backup fallback, and automatic affinity invalidation.
-- [ ] 9.2 Implement plan-rank normalization and presence-aware minimum remaining-quota scoring.
-- [ ] 9.3 Implement automatic strict-group construction while preserving the existing paid-first, free-first, free-only, and custom behavior.
-- [ ] 9.4 Make automatic modes ignore manual priority and weight, rotate exact ties equally, and keep persisted custom values unchanged.
-- [ ] 9.5 Extend policy validation, profile management, README examples, and migration compatibility tests for the new profile values.
+- [x] 9.1 Add failing scheduler tests for `auto`, quota high/low, plan high/low, unknown metrics, reserve-before-ordering, exact ties, backup fallback, and automatic affinity invalidation.
+- [x] 9.2 Implement plan-rank normalization and presence-aware minimum remaining-quota scoring.
+- [x] 9.3 Implement automatic strict-group construction while preserving the existing paid-first, free-first, free-only, and custom behavior.
+- [x] 9.4 Make automatic modes ignore manual priority and weight, rotate exact ties equally, and keep persisted custom values unchanged.
+- [x] 9.5 Extend policy validation, profile management, README examples, and migration compatibility tests for the new profile values.
 
 ## 10. Visual Diagnostics
 
-- [ ] 10.1 Add failing management tests for funnel counts, human-readable candidate fields, grouped exclusion reasons, and non-mutating previews.
-- [ ] 10.2 Add a bounded, secret-free real-decision ring and authenticated `GET /codex-account-pool/decisions` route with tests proving previews do not create entries.
-- [ ] 10.3 Replace raw JSON preview rendering with a route funnel, selected-account summary, ordered candidate table, and grouped exclusion reasons.
-- [ ] 10.4 Add a recent-real-scheduling table and grouped route-mode control; visually disable priority and weight inputs in automatic modes without deleting values.
-- [ ] 10.5 Verify responsive layout, static-resource secrecy, plugin tests, race tests, vet, host tests, server compile, Linux shared-library build, OpenSpec validation, and one real request-to-decision smoke test.
+- [x] 10.1 Add failing management tests for funnel counts, human-readable candidate fields, grouped exclusion reasons, and non-mutating previews.
+- [x] 10.2 Add a bounded, secret-free real-decision ring and authenticated `GET /codex-account-pool/decisions` route with tests proving previews do not create entries.
+- [x] 10.3 Replace raw JSON preview rendering with a route funnel, selected-account summary, ordered candidate table, and grouped exclusion reasons.
+- [x] 10.4 Add a recent-real-scheduling table and grouped route-mode control; visually disable priority and weight inputs in automatic modes without deleting values.
+- [ ] 10.5 Verify responsive layout, static-resource secrecy, plugin tests, race tests, vet, host tests, server compile, Linux shared-library build, OpenSpec validation, Home mode disabled, and one real request-to-decision smoke test.

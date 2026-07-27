@@ -5,34 +5,346 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Codex Account Pool</title>
   <style>
-    :root{color-scheme:light;--bg:#f5f7f9;--surface:#fff;--line:#d8dee5;--text:#18212b;--muted:#66727f;--accent:#176b87;--accent-soft:#e5f3f7;--good:#18794e;--warn:#9a6700;--bad:#b42318;--shadow:0 1px 2px rgba(17,24,39,.06)}
-    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;letter-spacing:0}
-    button,input,select{font:inherit}button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.55}
-    .topbar{position:sticky;top:0;z-index:10;border-bottom:1px solid var(--line);background:rgba(255,255,255,.96);backdrop-filter:blur(8px)}
-    .topbar-inner{max-width:1500px;margin:auto;min-height:58px;padding:9px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-    h1{font-size:17px;line-height:1.2;margin:0 8px 0 0}.status{color:var(--muted);font-size:12px}
-    .spacer{flex:1}.control{height:34px;border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:0 10px;color:var(--text)}
-    .button{height:34px;border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:0 12px;color:var(--text);font-weight:600}
-    .button:hover{border-color:#9eabb8}.button.primary{background:var(--accent);border-color:var(--accent);color:#fff}.button.danger{color:var(--bad)}
-    .segments{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--surface)}
-    .segments button{height:32px;border:0;border-right:1px solid var(--line);background:transparent;padding:0 11px;color:var(--muted)}.segments button:last-child{border-right:0}.segments button.active{background:var(--accent-soft);color:var(--accent);font-weight:700}
-    main{max-width:1500px;margin:auto;padding:16px 18px 32px}.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
-    .toolbar .control{min-width:160px}.summary{font-size:12px;color:var(--muted);margin-left:auto}
-    .batch{display:none;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 12px;border:1px solid #a9cbd6;background:#eff8fa;border-radius:6px;margin-bottom:10px}.batch.visible{display:flex}.batch strong{color:var(--accent)}
-    .table-wrap{border:1px solid var(--line);background:var(--surface);box-shadow:var(--shadow);overflow:auto;border-radius:6px}
-    table{width:100%;min-width:1220px;border-collapse:collapse;table-layout:fixed}th,td{border-bottom:1px solid #e7ebef;padding:8px 7px;text-align:left;vertical-align:middle}
-    th{position:sticky;top:0;background:#f8fafb;color:#4b5967;font-size:12px;font-weight:700;z-index:2}tr:last-child td{border-bottom:0}tbody tr:hover{background:#fafcfd}tbody tr.changed{background:#fff9e8}
-    .check{width:38px;text-align:center}.account{width:245px}.plan{width:88px}.quota{width:110px}.state{width:108px}.number{width:90px}.toggle{width:72px;text-align:center}.actions{width:90px}
-    .account-name{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.account-sub{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
-    .pill{display:inline-flex;align-items:center;min-height:22px;padding:2px 7px;border-radius:999px;background:#edf1f4;color:#4c5b68;font-size:11px;font-weight:700}.pill.free{background:#e7f6ed;color:var(--good)}.pill.paid{background:#e8f0ff;color:#315ca8}.pill.backup{background:#fff1df;color:#8b5200}.pill.refreshing{background:#e5f3f7;color:var(--accent)}.pill.failed{background:#fdecec;color:var(--bad)}
-    .meter{height:5px;background:#e7ebef;border-radius:5px;overflow:hidden;margin-top:4px}.meter span{display:block;height:100%;background:var(--good)}.meter.warn span{background:var(--warn)}.meter.bad span{background:var(--bad)}
-    .number-input{width:72px;height:30px;border:1px solid var(--line);border-radius:5px;padding:0 7px}.number-input:focus,.control:focus{outline:2px solid #b7dce7;outline-offset:1px;border-color:var(--accent)}
-    .switch{width:36px;height:20px;border:0;border-radius:999px;background:#bec7d0;padding:2px;vertical-align:middle}.switch span{display:block;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .15s}.switch.on{background:var(--accent)}.switch.on span{transform:translateX(16px)}
-    .empty{padding:42px;text-align:center;color:var(--muted)}.error{color:var(--bad)}.success{color:var(--good)}.state-sub{font-size:10px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.hidden{display:none!important}
-    dialog{border:1px solid var(--line);border-radius:7px;box-shadow:0 20px 60px rgba(17,24,39,.24);padding:0;max-width:440px;width:calc(100% - 28px)}dialog::backdrop{background:rgba(17,24,39,.35)}
-    .dialog-body{padding:18px}.dialog-body h2{font-size:17px;margin:0 0 12px}.dialog-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid var(--line)}
-    .key-row{display:flex;gap:8px}.key-row input{flex:1}.preview{white-space:pre-wrap;background:#f6f8fa;border:1px solid var(--line);border-radius:6px;padding:12px;max-height:280px;overflow:auto}
-    @media(max-width:720px){.topbar{position:static}.topbar-inner,main{padding-left:10px;padding-right:10px}.spacer{display:none}.summary{width:100%;margin-left:0}.toolbar .control{flex:1;min-width:130px}.batch .control{min-width:92px;flex:1}h1{width:100%}}
+    :root {
+      color-scheme: light;
+      --bg: #f4f6f8;
+      --surface: #ffffff;
+      --surface-alt: #f8fafb;
+      --line: #d7dde3;
+      --line-strong: #aeb8c2;
+      --text: #17212b;
+      --muted: #64717d;
+      --teal: #0b7189;
+      --teal-soft: #e4f3f6;
+      --blue: #315ca8;
+      --blue-soft: #e8f0ff;
+      --green: #18794e;
+      --green-soft: #e7f6ed;
+      --amber: #8b5b00;
+      --amber-soft: #fff3d8;
+      --red: #b42318;
+      --red-soft: #fdecec;
+      --shadow: 0 1px 2px rgba(17, 24, 39, .06);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity: .52; }
+    h1, h2, h3, p { margin-top: 0; }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, .97);
+      backdrop-filter: blur(8px);
+    }
+    .topbar-inner {
+      max-width: 1500px;
+      min-height: 58px;
+      margin: auto;
+      padding: 9px 18px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    h1 { margin: 0 10px 0 0; font-size: 17px; line-height: 1.2; }
+    h2 { margin-bottom: 10px; font-size: 15px; }
+    h3 { margin-bottom: 8px; font-size: 13px; color: #435160; }
+    .status { color: var(--muted); font-size: 12px; }
+    .success { color: var(--green); }
+    .error { color: var(--red); }
+    .spacer { flex: 1; }
+    .button, .control {
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--text);
+    }
+    .button { padding: 0 12px; font-weight: 650; }
+    .button:hover:not(:disabled) { border-color: var(--line-strong); }
+    .button.primary { border-color: var(--teal); background: var(--teal); color: #fff; }
+    .button.danger { color: var(--red); }
+    .control { padding: 0 10px; }
+    .control:focus, .number-input:focus {
+      outline: 2px solid #b7dce7;
+      outline-offset: 1px;
+      border-color: var(--teal);
+    }
+    main { max-width: 1500px; margin: auto; padding: 14px 18px 34px; }
+    .mode-bar {
+      margin-bottom: 12px;
+      padding: 10px 0 11px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      flex-wrap: wrap;
+    }
+    .mode-label { color: #435160; font-size: 12px; font-weight: 750; }
+    .segments {
+      display: inline-flex;
+      max-width: 100%;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+    }
+    .segments button {
+      min-width: max-content;
+      height: 32px;
+      padding: 0 10px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      background: transparent;
+      color: var(--muted);
+    }
+    .segments button:last-child { border-right: 0; }
+    .segments button.active { background: var(--teal-soft); color: var(--teal); font-weight: 750; }
+    .profile-line {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 22px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .profile-line strong { color: #435160; }
+    .notice {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 8px;
+      border-left: 3px solid var(--amber);
+      background: var(--amber-soft);
+      color: #6f4800;
+    }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .toolbar .control { min-width: 160px; }
+    .summary { margin-left: auto; color: var(--muted); font-size: 12px; }
+    .batch {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+      padding: 9px 11px;
+      border: 1px solid #a9cbd6;
+      border-radius: 6px;
+      background: #eff8fa;
+    }
+    .batch.visible { display: flex; }
+    .batch strong { color: var(--teal); }
+    .table-wrap {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    .account-table { min-width: 1220px; }
+    .decision-table { min-width: 900px; }
+    .preview-table { min-width: 940px; }
+    th, td {
+      padding: 8px 7px;
+      border-bottom: 1px solid #e7ebef;
+      text-align: left;
+      vertical-align: middle;
+      overflow-wrap: anywhere;
+    }
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: var(--surface-alt);
+      color: #4b5967;
+      font-size: 12px;
+      font-weight: 750;
+    }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: #fafcfd; }
+    tbody tr.changed { background: #fff9e8; }
+    tbody tr.active-group { background: #eef8f4; }
+    .check { width: 38px; text-align: center; }
+    .account { width: 245px; }
+    .plan { width: 100px; }
+    .quota { width: 110px; }
+    .state { width: 116px; }
+    .number { width: 90px; }
+    .toggle { width: 72px; text-align: center; }
+    .account-name { overflow: hidden; font-weight: 680; text-overflow: ellipsis; white-space: nowrap; }
+    .account-sub, .cell-sub {
+      margin-top: 2px;
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: #edf1f4;
+      color: #4c5b68;
+      font-size: 11px;
+      font-weight: 750;
+    }
+    .pill.free, .pill.ready, .pill.group { background: var(--green-soft); color: var(--green); }
+    .pill.paid, .pill.layer { background: var(--blue-soft); color: var(--blue); }
+    .pill.backup, .pill.waiting { background: var(--amber-soft); color: var(--amber); }
+    .pill.refreshing { background: var(--teal-soft); color: var(--teal); }
+    .pill.failed, .pill.excluded { background: var(--red-soft); color: var(--red); }
+    .meter { height: 5px; margin-top: 4px; overflow: hidden; border-radius: 5px; background: #e7ebef; }
+    .meter span { display: block; height: 100%; background: var(--green); }
+    .meter.warn span { background: #b77b00; }
+    .meter.bad span { background: var(--red); }
+    .number-input {
+      width: 72px;
+      height: 30px;
+      padding: 0 7px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: var(--surface);
+    }
+    .switch {
+      width: 36px;
+      height: 20px;
+      padding: 2px;
+      border: 0;
+      border-radius: 999px;
+      background: #bec7d0;
+      vertical-align: middle;
+    }
+    .switch span {
+      display: block;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #fff;
+      transition: transform .15s;
+    }
+    .switch.on { background: var(--teal); }
+    .switch.on span { transform: translateX(16px); }
+    .section-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 22px 0 9px;
+    }
+    .section-head h2 { margin: 0; }
+    .section-head .status { margin-left: auto; }
+    .empty { padding: 34px; color: var(--muted); text-align: center; }
+    .hidden { display: none !important; }
+    dialog {
+      width: min(1120px, calc(100% - 24px));
+      max-width: none;
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      box-shadow: 0 20px 60px rgba(17, 24, 39, .24);
+    }
+    dialog::backdrop { background: rgba(17, 24, 39, .38); }
+    .key-dialog { width: min(440px, calc(100% - 24px)); }
+    .dialog-body { padding: 16px 18px; }
+    .dialog-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .dialog-title h2 { margin: 0; font-size: 17px; }
+    .dialog-title .spacer { min-width: 10px; }
+    .dialog-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 11px 18px;
+      border-top: 1px solid var(--line);
+    }
+    .key-row { display: flex; gap: 8px; }
+    .key-row input { flex: 1; }
+    .preview-summary {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr);
+      gap: 16px;
+      padding: 10px 0 14px;
+      border-bottom: 1px solid var(--line);
+    }
+    .selected-account { min-height: 46px; }
+    .selected-account strong { display: block; margin-bottom: 4px; font-size: 16px; }
+    .funnel {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(92px, 1fr));
+      margin: 14px 0;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow: hidden;
+      background: var(--surface);
+    }
+    .funnel-step {
+      min-width: 0;
+      padding: 9px 10px;
+      border-right: 1px solid var(--line);
+    }
+    .funnel-step:last-child { border-right: 0; }
+    .funnel-step span { display: block; color: var(--muted); font-size: 11px; }
+    .funnel-step strong { display: block; margin-top: 3px; font-size: 18px; }
+    .exclusions { display: flex; gap: 7px; flex-wrap: wrap; min-height: 26px; }
+    .exclusion-item {
+      padding: 4px 7px;
+      border: 1px solid #efc3bf;
+      border-radius: 5px;
+      background: #fff7f6;
+      color: #7e271f;
+      font-size: 12px;
+    }
+    .preview-table-wrap { max-height: 360px; margin-top: 10px; }
+    @media (max-width: 920px) {
+      .funnel { grid-template-columns: repeat(3, 1fr); }
+      .funnel-step:nth-child(3) { border-right: 0; }
+      .funnel-step:nth-child(-n+3) { border-bottom: 1px solid var(--line); }
+      .preview-summary { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 720px) {
+      .topbar { position: static; }
+      .topbar-inner, main { padding-left: 10px; padding-right: 10px; }
+      h1 { width: 100%; }
+      .spacer { display: none; }
+      .toolbar .control, .batch .control { flex: 1; min-width: 128px; }
+      .summary { width: 100%; margin-left: 0; }
+      .mode-bar { align-items: stretch; }
+      .mode-label { width: 100%; }
+      .segments { width: 100%; }
+      .profile-line { display: grid; grid-template-columns: 1fr; gap: 6px; }
+      .profile-line strong, .profile-line span { width: 100%; }
+      .funnel { grid-template-columns: repeat(2, 1fr); }
+      .funnel-step { border-bottom: 1px solid var(--line); }
+      .funnel-step:nth-child(2n) { border-right: 0; }
+      .funnel-step:nth-last-child(-n+2) { border-bottom: 0; }
+      .dialog-title { align-items: stretch; flex-wrap: wrap; }
+      .dialog-title .control { width: 100%; }
+    }
   </style>
 </head>
 <body>
@@ -40,13 +352,36 @@
     <div class="topbar-inner">
       <h1>Codex Account Pool</h1>
       <span id="connectionStatus" class="status">未连接</span>
-      <div class="segments" id="profileSegments" aria-label="路由模式">
+      <div class="spacer"></div>
+      <button class="button" id="reloadButton">重新加载</button>
+      <button class="button" id="previewButton">调度预览</button>
+      <button class="button" id="refreshButton">刷新额度</button>
+      <button class="button primary" id="applyButton" disabled>应用更改</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="mode-bar">
+      <span class="mode-label">自动调度</span>
+      <div class="segments" id="automaticProfileSegments" aria-label="自动路由模式">
+        <button data-profile="auto">自动</button>
+        <button data-profile="quota-high-first">高额度</button>
+        <button data-profile="quota-low-first">低额度</button>
+        <button data-profile="plan-high-first">高订阅</button>
+        <button data-profile="plan-low-first">低订阅</button>
+      </div>
+      <span class="mode-label">严格调度</span>
+      <div class="segments" id="strictProfileSegments" aria-label="严格路由模式">
         <button data-profile="paid-first">付费优先</button>
         <button data-profile="free-first">Free 优先</button>
         <button data-profile="free-only">仅 Free</button>
         <button data-profile="custom">自定义</button>
       </div>
-      <select class="control" id="profileDuration" aria-label="模式持续时间"><option value="0">永久</option><option value="60">1 小时</option><option value="360">6 小时</option></select>
+      <select class="control" id="profileDuration" aria-label="模式持续时间">
+        <option value="0">永久</option>
+        <option value="60">1 小时</option>
+        <option value="360">6 小时</option>
+      </select>
       <select class="control" id="customPlanOrder" aria-label="自定义套餐顺序">
         <option value="paid,free,unknown">付费 → Free → 未知</option>
         <option value="free,paid,unknown">Free → 付费 → 未知</option>
@@ -55,74 +390,608 @@
         <option value="unknown,paid,free">未知 → 付费 → Free</option>
         <option value="unknown,free,paid">未知 → Free → 付费</option>
       </select>
-      <span id="profileStatus" class="status"></span>
       <button class="button hidden" id="clearTemporaryButton">清除临时模式</button>
-      <div class="spacer"></div>
-      <button class="button" id="previewButton">调度预览</button>
-      <button class="button" id="refreshButton">刷新额度</button>
-      <button class="button primary" id="applyButton" disabled>应用更改</button>
-    </div>
-  </header>
-  <main>
+      <div class="profile-line">
+        <strong id="profileStatus"></strong>
+        <span id="profileRule"></span>
+        <span class="notice hidden" id="manualRoutingNotice">当前为自动模式，已保存的优先级和权重不会参与调度。</span>
+      </div>
+    </section>
+
     <section class="toolbar">
       <input class="control" id="searchInput" type="search" placeholder="搜索账号">
-      <select class="control" id="planFilter"><option value="">全部套餐</option><option value="free">Free</option><option value="paid">付费</option><option value="unknown">未知</option></select>
-      <select class="control" id="stateFilter"><option value="">全部状态</option><option value="ready">可用</option><option value="disabled">已停用</option><option value="backup">备用</option><option value="stale">额度过期</option></select>
+      <select class="control" id="planFilter">
+        <option value="">全部套餐</option>
+        <option value="free">Free</option>
+        <option value="paid">付费</option>
+        <option value="unknown">未知</option>
+      </select>
+      <select class="control" id="stateFilter">
+        <option value="">全部状态</option>
+        <option value="ready">可用</option>
+        <option value="disabled">已停用</option>
+        <option value="backup">备用</option>
+        <option value="stale">额度过期</option>
+      </select>
       <button class="button" id="selectFreeButton">选择全部 Free</button>
       <button class="button" id="selectPaidButton">选择全部付费</button>
       <span class="summary" id="summary"></span>
     </section>
+
     <section class="batch" id="batchBar">
       <strong id="selectedCount">已选择 0 个</strong>
-      <input class="control" id="batchPriority" type="number" placeholder="优先级">
-      <input class="control" id="batchWeight" type="number" min="1" placeholder="权重">
-      <select class="control" id="batchBackup"><option value="">备用不变</option><option value="false">设为普通</option><option value="true">设为备用</option></select>
-      <select class="control" id="batchEnabled"><option value="">启用不变</option><option value="true">启用</option><option value="false">停用</option></select>
+      <input class="control manual-routing-control" id="batchPriority" type="number" placeholder="优先级">
+      <input class="control manual-routing-control" id="batchWeight" type="number" min="1" placeholder="权重">
+      <select class="control" id="batchBackup">
+        <option value="">备用不变</option>
+        <option value="false">设为普通</option>
+        <option value="true">设为备用</option>
+      </select>
+      <select class="control" id="batchEnabled">
+        <option value="">启用不变</option>
+        <option value="true">启用</option>
+        <option value="false">停用</option>
+      </select>
       <input class="control" id="batchFiveHourReserve" type="number" min="0" max="100" placeholder="5h 保留">
       <input class="control" id="batchWeeklyReserve" type="number" min="0" max="100" placeholder="周保留">
       <button class="button" id="applyBatchButton">应用到所选</button>
       <button class="button" id="refreshSelectedButton">刷新所选</button>
     </section>
+
     <div class="table-wrap">
-      <table>
-        <thead><tr><th class="check"><input id="selectAll" type="checkbox" aria-label="全选"></th><th class="account">账号</th><th class="plan">套餐</th><th class="quota">5 小时</th><th class="quota">周额度</th><th class="state">状态</th><th class="number">优先级</th><th class="number">权重</th><th class="toggle">备用</th><th class="toggle">启用</th><th class="number">5h 保留</th><th class="number">周保留</th></tr></thead>
-        <tbody id="accountRows"><tr><td colspan="12" class="empty">输入管理密钥后加载账号</td></tr></tbody>
+      <table class="account-table">
+        <thead>
+          <tr>
+            <th class="check"><input id="selectAll" type="checkbox" aria-label="全选"></th>
+            <th class="account">账号</th>
+            <th class="plan">套餐</th>
+            <th class="quota">5 小时</th>
+            <th class="quota">周额度</th>
+            <th class="state">状态</th>
+            <th class="number">优先级</th>
+            <th class="number">权重</th>
+            <th class="toggle">备用</th>
+            <th class="toggle">启用</th>
+            <th class="number">5h 保留</th>
+            <th class="number">周保留</th>
+          </tr>
+        </thead>
+        <tbody id="accountRows">
+          <tr><td colspan="12" class="empty">输入管理密钥后加载账号</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <section class="section-head">
+      <h2>最近真实调度</h2>
+      <span class="status" id="decisionStatus">尚未加载</span>
+    </section>
+    <div class="table-wrap">
+      <table class="decision-table">
+        <thead>
+          <tr>
+            <th style="width:180px">时间</th>
+            <th style="width:180px">账号</th>
+            <th style="width:150px">模型</th>
+            <th style="width:140px">模式</th>
+            <th style="width:90px">层级</th>
+            <th style="width:180px">候选 → 可用 → 最终组</th>
+          </tr>
+        </thead>
+        <tbody id="decisionRows">
+          <tr><td colspan="6" class="empty">暂无真实调度记录</td></tr>
+        </tbody>
       </table>
     </div>
   </main>
-  <dialog id="keyDialog">
+
+  <dialog class="key-dialog" id="keyDialog">
     <form method="dialog">
-      <div class="dialog-body"><h2>连接管理接口</h2><div class="key-row"><input class="control" id="keyInput" type="password" autocomplete="current-password" placeholder="Management Key"></div></div>
-      <div class="dialog-actions"><button class="button primary" id="connectButton" value="default">连接</button></div>
+      <div class="dialog-body">
+        <div class="dialog-title"><h2>连接管理接口</h2></div>
+        <div class="key-row">
+          <input class="control" id="keyInput" type="password" autocomplete="current-password" placeholder="Management Key">
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <button class="button primary" id="connectButton" value="default">连接</button>
+      </div>
     </form>
   </dialog>
+
   <dialog id="previewDialog">
-    <div class="dialog-body"><h2>调度预览</h2><input class="control" id="previewModel" placeholder="模型，可留空"><pre class="preview" id="previewOutput">等待预览</pre></div>
-    <div class="dialog-actions"><button class="button" id="runPreviewButton">运行</button><button class="button" onclick="previewDialog.close()">关闭</button></div>
+    <div class="dialog-body">
+      <div class="dialog-title">
+        <h2>调度预览</h2>
+        <div class="spacer"></div>
+        <input class="control" id="previewModel" placeholder="模型，可留空">
+        <button class="button primary" id="runPreviewButton">运行预览</button>
+        <button class="button" id="closePreviewButton">关闭</button>
+      </div>
+      <div class="status" id="previewStatus">等待预览</div>
+      <div class="preview-summary">
+        <section>
+          <h3>预计选择</h3>
+          <div class="selected-account" id="previewSelected">尚未运行</div>
+        </section>
+        <section>
+          <h3>当前规则</h3>
+          <div id="previewRule" class="status"></div>
+        </section>
+      </div>
+      <div class="funnel" id="previewFunnel"></div>
+      <section>
+        <h3>排除原因</h3>
+        <div class="exclusions" id="previewExclusions"><span class="status">尚未运行</span></div>
+      </section>
+      <div class="table-wrap preview-table-wrap">
+        <table class="preview-table">
+          <thead>
+            <tr>
+              <th style="width:210px">账号</th>
+              <th style="width:110px">层级</th>
+              <th style="width:135px">订阅排序</th>
+              <th style="width:110px">额度分数</th>
+              <th style="width:120px">手工参数</th>
+              <th style="width:210px">结果</th>
+            </tr>
+          </thead>
+          <tbody id="previewCandidates">
+            <tr><td colspan="6" class="empty">尚未运行预览</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </dialog>
+
   <script>
-    const apiBase="/v0/management/codex-account-pool";let managementKey=sessionStorage.getItem("codexPoolKey")||"";let accounts=[];let pending=new Map();let selected=new Set();let currentProfile="";
-    const $=id=>document.getElementById(id);const escapeHTML=value=>String(value??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]));
-    async function api(path,options={}){const headers={"X-Management-Key":managementKey,"Content-Type":"application/json",...(options.headers||{})};const response=await fetch(apiBase+path,{...options,headers});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.message||data.error||`HTTP ${response.status}`);return data}
-    function policyFor(account){return {...account.policy,...(pending.get(account.id)||{})}}function quotaCell(value,present){if(!present)return'<span class="status">--</span>';const n=Number(value||0),cls=n<=10?"bad":n<=30?"warn":"";return `<strong>${n}%</strong><div class="meter ${cls}"><span style="width:${n}%"></span></div>`}function shortTime(value){if(!value)return"";const date=new Date(value);return Number.isNaN(date.getTime())?"":date.toLocaleString()}
-    function filtered(){const query=$("searchInput").value.trim().toLowerCase(),plan=$("planFilter").value,state=$("stateFilter").value;return accounts.filter(a=>{const p=policyFor(a);if(query&&!`${a.label||""} ${a.email||""} ${a.id}`.toLowerCase().includes(query))return false;if(plan&&a.plan!==plan)return false;if(state==="backup"&&!p.backup)return false;if(state==="disabled"&&p.enabled&&!a.host_disabled)return false;if(state==="stale"&&a.quota_fresh)return false;if(state==="ready"&&(!p.enabled||a.host_disabled||a.host_unavailable||!a.quota_fresh))return false;return true})}
-    function render(){const rows=filtered();$("summary").textContent=`显示 ${rows.length} / ${accounts.length} 个账号`;updateBatch();if(!rows.length){$("accountRows").innerHTML='<tr><td colspan="12" class="empty">没有符合条件的账号</td></tr>';return}$("accountRows").innerHTML=rows.map(a=>{const p=policyFor(a),changed=pending.has(a.id),refresh=a.refresh||{},refreshing=refresh.state==="queued"||refresh.state==="refreshing",failed=refresh.state==="failed",status=!p.enabled||a.host_disabled?"已停用":a.host_unavailable?"不可用":refreshing?(refresh.state==="queued"?"等待刷新":"刷新中"):failed?"刷新失败":p.backup?"备用":!a.quota_fresh?"额度过期":"可用",statusClass=refreshing?"refreshing":failed?"failed":p.backup?"backup":"",next=shortTime(refresh.next_refresh),detail=refreshing&&next?`下次 ${next}`:failed?(refresh.last_error||"刷新失败"):next?`下次 ${next}`:"";return `<tr class="${changed?"changed":""}" data-id="${escapeHTML(a.id)}"><td class="check"><input type="checkbox" data-select="${escapeHTML(a.id)}" ${selected.has(a.id)?"checked":""}></td><td class="account"><div class="account-name">${escapeHTML(a.label||a.email||a.id)}</div><div class="account-sub">${escapeHTML(a.email||a.id)}</div></td><td><span class="pill ${a.plan}">${escapeHTML(a.plan_type||a.plan)}</span></td><td>${quotaCell(a.five_hour_remaining,a.five_hour_window_present)}</td><td>${quotaCell(a.weekly_remaining,a.weekly_window_present)}</td><td><span class="pill ${statusClass}">${status}</span>${detail?`<div class="state-sub" title="${escapeHTML(detail)}">${escapeHTML(detail)}</div>`:""}</td><td><input class="number-input" type="number" data-field="priority" value="${p.priority}"></td><td><input class="number-input" type="number" min="1" data-field="weight" value="${p.weight}"></td><td class="toggle"><button class="switch ${p.backup?"on":""}" data-toggle="backup" aria-label="备用"><span></span></button></td><td class="toggle"><button class="switch ${p.enabled?"on":""}" data-toggle="enabled" aria-label="启用"><span></span></button></td><td><input class="number-input" type="number" min="0" max="100" data-field="five_hour_reserve" value="${p.five_hour_reserve}"></td><td><input class="number-input" type="number" min="0" max="100" data-field="weekly_reserve" value="${p.weekly_reserve}"></td></tr>`}).join("");bindRows();updateBatch()}
-    function bindRows(){document.querySelectorAll("#accountRows tr[data-id]").forEach(row=>{const id=row.dataset.id;row.querySelector("[data-select]").onchange=e=>{e.target.checked?selected.add(id):selected.delete(id);updateBatch()};row.querySelectorAll("[data-field]").forEach(input=>input.onchange=()=>edit(id,input.dataset.field,Number(input.value)));row.querySelectorAll("[data-toggle]").forEach(button=>button.onclick=()=>edit(id,button.dataset.toggle,!policyFor(accounts.find(a=>a.id===id))[button.dataset.toggle]))})}
-    function edit(id,field,value){pending.set(id,{...(pending.get(id)||{}),[field]:value});$("applyButton").disabled=false;render()}function updateBatch(){$("selectedCount").textContent=`已选择 ${selected.size} 个`;$("batchBar").classList.toggle("visible",selected.size>0)}
-    async function load(){try{const [accountData,profileData]=await Promise.all([api("/accounts"),api("/profile")]);accounts=accountData.accounts||[];currentProfile=profileData.effective;document.querySelectorAll("#profileSegments button").forEach(b=>b.classList.toggle("active",b.dataset.profile===currentProfile));const customOrder=(profileData.custom_plan_order||[]).join(",");if(customOrder)$("customPlanOrder").value=customOrder;const temporary=profileData.temporary,expires=temporary&&shortTime(temporary.expires_at);$("profileStatus").textContent=temporary&&expires?`临时至 ${expires}`:`长期：${profileData.persistent}`;$("clearTemporaryButton").classList.toggle("hidden",!temporary);$("connectionStatus").textContent="已连接";$("connectionStatus").className="status success";render()}catch(error){$("connectionStatus").textContent=error.message;$("connectionStatus").className="status error";throw error}}
-    async function applyPending(){if(!pending.size)return;const updates=[...pending].map(([id,set])=>({id,set}));await api("/accounts",{method:"PATCH",body:JSON.stringify({updates})});pending.clear();$("applyButton").disabled=true;await load()}
-    function batchPatch(){const set={};if($("batchPriority").value!=="")set.priority=Number($("batchPriority").value);if($("batchWeight").value!=="")set.weight=Number($("batchWeight").value);if($("batchBackup").value!=="")set.backup=$("batchBackup").value==="true";if($("batchEnabled").value!=="")set.enabled=$("batchEnabled").value==="true";if($("batchFiveHourReserve").value!=="")set.five_hour_reserve=Number($("batchFiveHourReserve").value);if($("batchWeeklyReserve").value!=="")set.weekly_reserve=Number($("batchWeeklyReserve").value);if(!Object.keys(set).length)return;for(const id of selected)pending.set(id,{...(pending.get(id)||{}),...set});$("applyButton").disabled=pending.size===0;render()}
-    async function setProfile(profile){const duration=Number($("profileDuration").value||0),customPlanOrder=$("customPlanOrder").value.split(",");await api("/profile",{method:"PUT",body:JSON.stringify({profile,duration_minutes:duration,custom_plan_order:customPlanOrder})});await load()}
-    async function pollRefreshStatus(attempt=0){await load();const active=accounts.some(account=>["queued","refreshing"].includes(account.refresh?.state));if(active&&attempt<59)setTimeout(()=>pollRefreshStatus(attempt+1).catch(error=>{$("connectionStatus").textContent=error.message;$("connectionStatus").className="status error"}),2000)}
-    async function refresh(ids=[]){await api("/refresh",{method:"POST",body:JSON.stringify({ids})});$("connectionStatus").textContent="额度刷新已排队";await pollRefreshStatus()}
-    $("applyButton").onclick=()=>applyPending().catch(alert);$("applyBatchButton").onclick=batchPatch;$("refreshButton").onclick=()=>refresh().catch(alert);$("refreshSelectedButton").onclick=()=>refresh([...selected]).catch(alert);
-    $("searchInput").oninput=render;$("planFilter").onchange=render;$("stateFilter").onchange=render;$("selectAll").onchange=e=>{for(const a of filtered())e.target.checked?selected.add(a.id):selected.delete(a.id);render()};
-    $("selectFreeButton").onclick=()=>{for(const a of filtered().filter(a=>a.plan==="free"))selected.add(a.id);render()};$("selectPaidButton").onclick=()=>{for(const a of filtered().filter(a=>a.plan==="paid"))selected.add(a.id);render()};
-    document.querySelectorAll("#profileSegments button").forEach(button=>button.onclick=()=>setProfile(button.dataset.profile).catch(alert));
-    $("clearTemporaryButton").onclick=()=>api("/profile",{method:"PUT",body:JSON.stringify({clear_temporary:true})}).then(load).catch(alert);
-    $("previewButton").onclick=()=>previewDialog.showModal();$("runPreviewButton").onclick=async()=>{try{$("previewOutput").textContent=JSON.stringify(await api("/preview",{method:"POST",body:JSON.stringify({model:$("previewModel").value})}),null,2)}catch(error){$("previewOutput").textContent=error.message}};
-    $("connectButton").onclick=async event=>{event.preventDefault();managementKey=$("keyInput").value;sessionStorage.setItem("codexPoolKey",managementKey);try{await load();keyDialog.close()}catch(error){alert(error.message)}};
-    if(managementKey)load().catch(()=>keyDialog.showModal());else keyDialog.showModal();
+    const apiBase = "/v0/management/codex-account-pool";
+    const automaticProfiles = new Set(["auto", "quota-high-first", "quota-low-first", "plan-high-first", "plan-low-first"]);
+    const profileRules = {
+      "auto": "先选订阅等级最高的账号，再比较最低剩余额度；完整相同时等权轮换。",
+      "quota-high-first": "先选最低剩余额度最高的账号，再比较订阅等级。",
+      "quota-low-first": "先选仍高于保留线且最低剩余额度最低的账号，再比较订阅等级。",
+      "plan-high-first": "先选订阅等级最高的账号，再比较最低剩余额度。",
+      "plan-low-first": "先选订阅等级最低的账号，再比较最低剩余额度。",
+      "paid-first": "付费层优先；层内取最高优先级，再按权重平滑轮询。",
+      "free-first": "Free 层优先；层内取最高优先级，再按权重平滑轮询。",
+      "free-only": "只使用 Free 普通账号；普通层耗尽后才使用显式备用账号。",
+      "custom": "按自定义套餐顺序分层；层内取最高优先级，再按权重平滑轮询。"
+    };
+    const profileLabels = {
+      "auto": "自动",
+      "quota-high-first": "高额度",
+      "quota-low-first": "低额度",
+      "plan-high-first": "高订阅",
+      "plan-low-first": "低订阅",
+      "paid-first": "付费优先",
+      "free-first": "Free 优先",
+      "free-only": "仅 Free",
+      "custom": "自定义"
+    };
+    const reasonLabels = {
+      "plugin_disabled": "插件策略已停用",
+      "host_disabled": "宿主已停用",
+      "host_unavailable": "宿主标记不可用",
+      "host_error": "宿主账号异常",
+      "quota_stale": "额度数据过期",
+      "five_hour_reserve": "低于 5 小时保留线",
+      "weekly_reserve": "低于周额度保留线",
+      "profile_excluded": "不属于当前严格模式"
+    };
+
+    let managementKey = sessionStorage.getItem("codexPoolKey") || "";
+    let accounts = [];
+    let decisions = [];
+    let pending = new Map();
+    let selected = new Set();
+    let currentProfile = "";
+    let refreshPollGeneration = 0;
+    let refreshRequestGeneration = 0;
+    let latestSuccessfulRefreshRequest = 0;
+
+    const $ = id => document.getElementById(id);
+    const escapeHTML = value => String(value ?? "").replace(/[&<>"']/g, character => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      "\"": "&quot;",
+      "'": "&#39;"
+    })[character]);
+
+    async function api(path, options = {}) {
+      const headers = {
+        "X-Management-Key": managementKey,
+        "Content-Type": "application/json",
+        ...(options.headers || {})
+      };
+      const response = await fetch(apiBase + path, { ...options, headers });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.message || data.error || `HTTP ${response.status}`);
+      }
+      return data;
+    }
+
+    function policyFor(account) {
+      return { ...account.policy, ...(pending.get(account.id) || {}) };
+    }
+
+    function shortTime(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
+    }
+
+    function quotaCell(value, present) {
+      if (!present) return '<span class="status">--</span>';
+      const amount = Number(value || 0);
+      const className = amount <= 10 ? "bad" : amount <= 30 ? "warn" : "";
+      return `<strong>${amount}%</strong><div class="meter ${className}"><span style="width:${amount}%"></span></div>`;
+    }
+
+    function filtered() {
+      const query = $("searchInput").value.trim().toLowerCase();
+      const plan = $("planFilter").value;
+      const state = $("stateFilter").value;
+      return accounts.filter(account => {
+        const policy = policyFor(account);
+        if (query && !`${account.label || ""} ${account.email || ""} ${account.id}`.toLowerCase().includes(query)) return false;
+        if (plan && account.plan !== plan) return false;
+        if (state === "backup" && !policy.backup) return false;
+        if (state === "disabled" && policy.enabled && !account.host_disabled) return false;
+        if (state === "stale" && account.quota_fresh) return false;
+        if (state === "ready" && (!policy.enabled || account.host_disabled || account.host_unavailable || !account.quota_fresh)) return false;
+        return true;
+      });
+    }
+
+    function renderAccounts() {
+      const rows = filtered();
+      const automatic = automaticProfiles.has(currentProfile);
+      $("summary").textContent = `显示 ${rows.length} / ${accounts.length} 个账号`;
+      updateBatch();
+      if (!rows.length) {
+        $("accountRows").innerHTML = '<tr><td colspan="12" class="empty">没有符合条件的账号</td></tr>';
+        return;
+      }
+      $("accountRows").innerHTML = rows.map(account => {
+        const policy = policyFor(account);
+        const refresh = account.refresh || {};
+        const refreshing = refresh.state === "queued" || refresh.state === "refreshing";
+        const failed = refresh.state === "failed";
+        const status = !policy.enabled || account.host_disabled ? "已停用"
+          : account.host_unavailable ? "不可用"
+          : refreshing ? (refresh.state === "queued" ? "等待刷新" : "刷新中")
+          : failed ? "刷新失败"
+          : policy.backup ? "备用"
+          : !account.quota_fresh ? "额度过期"
+          : "可用";
+        const statusClass = refreshing ? "refreshing" : failed ? "failed" : policy.backup ? "backup" : "ready";
+        const nextRefresh = shortTime(refresh.next_refresh);
+        const detail = failed ? (refresh.last_error || "刷新失败") : nextRefresh ? `下次 ${nextRefresh}` : "";
+        return `
+          <tr class="${pending.has(account.id) ? "changed" : ""}" data-id="${escapeHTML(account.id)}">
+            <td class="check"><input type="checkbox" data-select="${escapeHTML(account.id)}" ${selected.has(account.id) ? "checked" : ""}></td>
+            <td class="account">
+              <div class="account-name">${escapeHTML(account.label || account.email || account.id)}</div>
+              <div class="account-sub">${escapeHTML(account.email || account.id)}</div>
+            </td>
+            <td><span class="pill ${escapeHTML(account.plan)}">${escapeHTML(account.plan_type || account.plan)}</span></td>
+            <td>${quotaCell(account.five_hour_remaining, account.five_hour_window_present)}</td>
+            <td>${quotaCell(account.weekly_remaining, account.weekly_window_present)}</td>
+            <td>
+              <span class="pill ${statusClass}">${status}</span>
+              ${detail ? `<div class="cell-sub" title="${escapeHTML(detail)}">${escapeHTML(detail)}</div>` : ""}
+            </td>
+            <td><input class="number-input" type="number" data-field="priority" value="${policy.priority}" ${automatic ? "disabled" : ""}></td>
+            <td><input class="number-input" type="number" min="1" data-field="weight" value="${policy.weight}" ${automatic ? "disabled" : ""}></td>
+            <td class="toggle"><button class="switch ${policy.backup ? "on" : ""}" data-toggle="backup" aria-label="备用"><span></span></button></td>
+            <td class="toggle"><button class="switch ${policy.enabled ? "on" : ""}" data-toggle="enabled" aria-label="启用"><span></span></button></td>
+            <td><input class="number-input" type="number" min="0" max="100" data-field="five_hour_reserve" value="${policy.five_hour_reserve}"></td>
+            <td><input class="number-input" type="number" min="0" max="100" data-field="weekly_reserve" value="${policy.weekly_reserve}"></td>
+          </tr>`;
+      }).join("");
+      bindRows();
+      updateBatch();
+    }
+
+    function bindRows() {
+      document.querySelectorAll("#accountRows tr[data-id]").forEach(row => {
+        const id = row.dataset.id;
+        row.querySelector("[data-select]").onchange = event => {
+          event.target.checked ? selected.add(id) : selected.delete(id);
+          updateBatch();
+        };
+        row.querySelectorAll("[data-field]").forEach(input => {
+          input.onchange = () => edit(id, input.dataset.field, Number(input.value));
+        });
+        row.querySelectorAll("[data-toggle]").forEach(button => {
+          button.onclick = () => {
+            const account = accounts.find(item => item.id === id);
+            edit(id, button.dataset.toggle, !policyFor(account)[button.dataset.toggle]);
+          };
+        });
+      });
+    }
+
+    function edit(id, field, value) {
+      pending.set(id, { ...(pending.get(id) || {}), [field]: value });
+      $("applyButton").disabled = false;
+      renderAccounts();
+    }
+
+    function updateBatch() {
+      $("selectedCount").textContent = `已选择 ${selected.size} 个`;
+      $("batchBar").classList.toggle("visible", selected.size > 0);
+      const automatic = automaticProfiles.has(currentProfile);
+      $("batchPriority").disabled = automatic;
+      $("batchWeight").disabled = automatic;
+    }
+
+    function updateProfile(profileData) {
+      currentProfile = profileData.effective;
+      document.querySelectorAll("[data-profile]").forEach(button => {
+        button.classList.toggle("active", button.dataset.profile === currentProfile);
+      });
+      const customOrder = (profileData.custom_plan_order || []).join(",");
+      if (customOrder) $("customPlanOrder").value = customOrder;
+      $("customPlanOrder").disabled = currentProfile !== "custom";
+      const temporary = profileData.temporary;
+      const expires = temporary && shortTime(temporary.expires_at);
+      $("profileStatus").textContent = temporary && expires
+        ? `${profileLabels[currentProfile] || currentProfile}，临时至 ${expires}`
+        : `${profileLabels[profileData.persistent] || profileData.persistent}，长期`;
+      $("profileRule").textContent = profileRules[currentProfile] || "";
+      $("clearTemporaryButton").classList.toggle("hidden", !temporary);
+      $("manualRoutingNotice").classList.toggle("hidden", !automaticProfiles.has(currentProfile));
+    }
+
+    function renderDecisions() {
+      $("decisionStatus").textContent = decisions.length ? `保留最近 ${decisions.length} 条` : "尚无真实请求";
+      if (!decisions.length) {
+        $("decisionRows").innerHTML = '<tr><td colspan="6" class="empty">暂无真实调度记录</td></tr>';
+        return;
+      }
+      $("decisionRows").innerHTML = decisions.map(decision => {
+        const account = accounts.find(item => item.id === decision.auth_id);
+        const accountName = account ? (account.label || account.email || account.id) : decision.auth_id;
+        return `
+          <tr>
+            <td>${escapeHTML(shortTime(decision.timestamp))}</td>
+            <td><div class="account-name">${escapeHTML(accountName)}</div><div class="account-sub">${escapeHTML(decision.auth_id)}</div></td>
+            <td>${escapeHTML(decision.model || "--")}</td>
+            <td><span class="pill ${automaticProfiles.has(decision.profile) ? "refreshing" : "layer"}">${escapeHTML(profileLabels[decision.profile] || decision.profile)}</span></td>
+            <td><span class="pill ${decision.layer === "backup" ? "backup" : "ready"}">${decision.layer === "backup" ? "备用" : "普通"}</span></td>
+            <td>${Number(decision.candidate_count || 0)} → ${Number(decision.eligible_count || 0)} → ${Number(decision.group_size || 0)}</td>
+          </tr>`;
+      }).join("");
+    }
+
+    async function load(generation = null) {
+      try {
+        const [accountData, profileData, decisionData] = await Promise.all([
+          api("/accounts"),
+          api("/profile"),
+          api("/decisions")
+        ]);
+        if (generation !== null && generation !== refreshPollGeneration) return false;
+        accounts = accountData.accounts || [];
+        decisions = decisionData.decisions || [];
+        updateProfile(profileData);
+        $("connectionStatus").textContent = "已连接";
+        $("connectionStatus").className = "status success";
+        renderAccounts();
+        renderDecisions();
+        return true;
+      } catch (error) {
+        if (generation !== null && generation !== refreshPollGeneration) return false;
+        $("connectionStatus").textContent = error.message;
+        $("connectionStatus").className = "status error";
+        throw error;
+      }
+    }
+
+    async function applyPending() {
+      if (!pending.size) return;
+      const updates = [...pending].map(([id, set]) => ({ id, set }));
+      await api("/accounts", { method: "PATCH", body: JSON.stringify({ updates }) });
+      pending.clear();
+      $("applyButton").disabled = true;
+      await load();
+    }
+
+    function batchPatch() {
+      const set = {};
+      if (!automaticProfiles.has(currentProfile) && $("batchPriority").value !== "") set.priority = Number($("batchPriority").value);
+      if (!automaticProfiles.has(currentProfile) && $("batchWeight").value !== "") set.weight = Number($("batchWeight").value);
+      if ($("batchBackup").value !== "") set.backup = $("batchBackup").value === "true";
+      if ($("batchEnabled").value !== "") set.enabled = $("batchEnabled").value === "true";
+      if ($("batchFiveHourReserve").value !== "") set.five_hour_reserve = Number($("batchFiveHourReserve").value);
+      if ($("batchWeeklyReserve").value !== "") set.weekly_reserve = Number($("batchWeeklyReserve").value);
+      if (!Object.keys(set).length) return;
+      for (const id of selected) {
+        pending.set(id, { ...(pending.get(id) || {}), ...set });
+      }
+      $("applyButton").disabled = pending.size === 0;
+      renderAccounts();
+    }
+
+    async function setProfile(profile) {
+      const duration = Number($("profileDuration").value || 0);
+      const customPlanOrder = $("customPlanOrder").value.split(",");
+      await api("/profile", {
+        method: "PUT",
+        body: JSON.stringify({ profile, duration_minutes: duration, custom_plan_order: customPlanOrder })
+      });
+      await load();
+    }
+
+    async function saveCustomPlanOrder() {
+      const customPlanOrder = $("customPlanOrder").value.split(",").map(value => value.trim()).filter(Boolean);
+      await api("/profile", {
+        method: "PUT",
+        body: JSON.stringify({ custom_plan_order: customPlanOrder })
+      });
+      await load();
+    }
+
+    async function pollRefreshStatus(generation, attempt = 0) {
+      if (generation !== refreshPollGeneration) return;
+      const loaded = await load(generation);
+      if (!loaded) return;
+      const active = accounts.some(account => ["queued", "refreshing"].includes(account.refresh?.state));
+      if (active && attempt < 59) {
+        setTimeout(() => pollRefreshStatus(generation, attempt + 1).catch(showError), 2000);
+      }
+    }
+
+    async function refresh(ids = []) {
+      const requestGeneration = ++refreshRequestGeneration;
+      try {
+        await api("/refresh", { method: "POST", body: JSON.stringify({ ids }) });
+      } catch (error) {
+        if (requestGeneration < refreshRequestGeneration) return;
+        throw error;
+      }
+      if (requestGeneration < latestSuccessfulRefreshRequest) return;
+      latestSuccessfulRefreshRequest = requestGeneration;
+      const generation = ++refreshPollGeneration;
+      $("connectionStatus").textContent = "额度刷新已排队";
+      await pollRefreshStatus(generation);
+    }
+
+    function previewCandidateStatus(candidate) {
+      if (candidate.in_active_group) return '<span class="pill group">最终组</span>';
+      if (candidate.in_active_layer) return '<span class="pill layer">当前层候选</span>';
+      if (candidate.eligible) return '<span class="pill waiting">其他层候选</span>';
+      const label = reasonLabels[candidate.reason] || candidate.reason_label || candidate.reason || "已排除";
+      return `<span class="pill excluded">已排除</span><div class="cell-sub">${escapeHTML(label)}</div>`;
+    }
+
+    function renderPreview(preview) {
+      const selectedAccount = preview.selected_account || {};
+      const selectedLabel = selectedAccount.label || selectedAccount.id || preview.selected_auth || "--";
+      const quota = selectedAccount.quota_known ? `${selectedAccount.quota_score}%` : "未知";
+      $("previewSelected").innerHTML = `
+        <strong>${escapeHTML(selectedLabel)}</strong>
+        <span class="pill ${selectedAccount.layer === "backup" ? "backup" : "ready"}">${selectedAccount.layer === "backup" ? "备用层" : "普通层"}</span>
+        <span class="status">${escapeHTML(selectedAccount.plan_type || selectedAccount.plan || "unknown")} · 额度分数 ${quota}</span>`;
+      $("previewRule").textContent = profileRules[preview.profile] || preview.profile || "";
+
+      const funnel = preview.funnel || {};
+      const steps = [
+        ["宿主候选", funnel.candidates || 0],
+        ["宿主可用", funnel.host_available || 0],
+        ["额度合格", funnel.quota_eligible || 0],
+        [preview.active_layer === "backup" ? "备用层" : "普通层", funnel.active_layer || 0],
+        ["最终策略组", funnel.strategy_group || 0],
+        ["预计账号", preview.selected_auth ? 1 : 0]
+      ];
+      $("previewFunnel").innerHTML = steps.map(([label, value]) => `
+        <div class="funnel-step"><span>${escapeHTML(label)}</span><strong>${Number(value)}</strong></div>
+      `).join("");
+
+      const exclusions = preview.exclusions || [];
+      $("previewExclusions").innerHTML = exclusions.length
+        ? exclusions.map(item => `<span class="exclusion-item">${escapeHTML(reasonLabels[item.reason] || item.label || item.reason)} · ${Number(item.count || 0)}</span>`).join("")
+        : '<span class="status">没有账号因策略被排除</span>';
+
+      const candidates = preview.candidates || [];
+      $("previewCandidates").innerHTML = candidates.length
+        ? candidates.map(candidate => {
+          const accountLabel = candidate.label || candidate.id;
+          const planRank = candidate.plan_known ? `${candidate.plan_rank}` : "未知";
+          const quotaScore = candidate.quota_known ? `${candidate.quota_score}%` : "未知";
+          const manual = preview.automatic
+            ? `${candidate.priority} / ${candidate.weight}<div class="cell-sub">自动模式忽略</div>`
+            : `${candidate.priority} / ${candidate.weight}`;
+          return `
+            <tr class="${candidate.in_active_group ? "active-group" : ""}">
+              <td><div class="account-name">${escapeHTML(accountLabel)}</div><div class="account-sub">${escapeHTML(candidate.id)}</div></td>
+              <td><span class="pill ${candidate.layer === "backup" ? "backup" : "ready"}">${candidate.layer === "backup" ? "备用" : "普通"}</span></td>
+              <td>${escapeHTML(candidate.plan_type || candidate.plan)}<div class="cell-sub">等级 ${planRank}</div></td>
+              <td>${quotaScore}</td>
+              <td>${manual}</td>
+              <td>${previewCandidateStatus(candidate)}</td>
+            </tr>`;
+        }).join("")
+        : '<tr><td colspan="6" class="empty">没有候选账号</td></tr>';
+      const scope = preview.scope === "inventory" ? "库存级预估，真实结果请看最近真实调度" : "调度预览";
+      $("previewStatus").textContent = `${scope} · 模式：${profileLabels[preview.profile] || preview.profile} · 模型：${preview.model || "未指定"}`;
+      $("previewStatus").className = "status success";
+    }
+
+    async function runPreview() {
+      $("previewStatus").textContent = "正在分析...";
+      $("previewStatus").className = "status";
+      try {
+        const preview = await api("/preview", {
+          method: "POST",
+          body: JSON.stringify({ model: $("previewModel").value })
+        });
+        renderPreview(preview);
+      } catch (error) {
+        $("previewStatus").textContent = error.message;
+        $("previewStatus").className = "status error";
+      }
+    }
+
+    function showError(error) {
+      $("connectionStatus").textContent = error.message;
+      $("connectionStatus").className = "status error";
+    }
+
+    $("applyButton").onclick = () => applyPending().catch(showError);
+    $("applyBatchButton").onclick = batchPatch;
+    $("reloadButton").onclick = () => load().catch(showError);
+    $("refreshButton").onclick = () => refresh().catch(showError);
+    $("refreshSelectedButton").onclick = () => refresh([...selected]).catch(showError);
+    $("searchInput").oninput = renderAccounts;
+    $("planFilter").onchange = renderAccounts;
+    $("stateFilter").onchange = renderAccounts;
+    $("customPlanOrder").onchange = () => saveCustomPlanOrder().catch(showError);
+    $("selectAll").onchange = event => {
+      for (const account of filtered()) {
+        event.target.checked ? selected.add(account.id) : selected.delete(account.id);
+      }
+      renderAccounts();
+    };
+    $("selectFreeButton").onclick = () => {
+      for (const account of filtered().filter(item => item.plan === "free")) selected.add(account.id);
+      renderAccounts();
+    };
+    $("selectPaidButton").onclick = () => {
+      for (const account of filtered().filter(item => item.plan === "paid")) selected.add(account.id);
+      renderAccounts();
+    };
+    document.querySelectorAll("[data-profile]").forEach(button => {
+      button.onclick = () => setProfile(button.dataset.profile).catch(showError);
+    });
+    $("clearTemporaryButton").onclick = () => api("/profile", {
+      method: "PUT",
+      body: JSON.stringify({ clear_temporary: true })
+    }).then(load).catch(showError);
+    $("previewButton").onclick = () => $("previewDialog").showModal();
+    $("closePreviewButton").onclick = () => $("previewDialog").close();
+    $("runPreviewButton").onclick = runPreview;
+    $("connectButton").onclick = async event => {
+      event.preventDefault();
+      managementKey = $("keyInput").value;
+      sessionStorage.setItem("codexPoolKey", managementKey);
+      try {
+        await load();
+        $("keyDialog").close();
+      } catch (error) {
+        alert(error.message);
+      }
+    };
+
+    if (managementKey) {
+      load().catch(() => $("keyDialog").showModal());
+    } else {
+      $("keyDialog").showModal();
+    }
   </script>
 </body>
 </html>

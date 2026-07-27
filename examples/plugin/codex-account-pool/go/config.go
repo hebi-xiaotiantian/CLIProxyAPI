@@ -10,7 +10,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const pluginID = "codex-account-pool"
+const (
+	pluginID      = "codex-account-pool"
+	pluginVersion = "0.2.0"
+)
 
 type rawConfig struct {
 	StateDir              string   `yaml:"state_dir"`
@@ -127,7 +130,7 @@ func pluginRegistration() registration {
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
 			Name:             pluginID,
-			Version:          "0.1.0",
+			Version:          pluginVersion,
 			Author:           "hebi-xiaotiantian",
 			GitHubRepository: "https://github.com/hebi-xiaotiantian/CLIProxyAPI",
 			Logo:             "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/docs/logo.png",
