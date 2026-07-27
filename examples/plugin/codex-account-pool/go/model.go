@@ -307,6 +307,9 @@ func normalizeUsageDocument(doc UsageDocument) (UsageDocument, error) {
 		if authID == "" {
 			return UsageDocument{}, fmt.Errorf("usage account id is required")
 		}
+		if _, exists := normalized[authID]; exists {
+			return UsageDocument{}, fmt.Errorf("duplicate usage account id %q", authID)
+		}
 		account.Requests = nonNegativeCounter(account.Requests)
 		account.FailedRequests = nonNegativeCounter(account.FailedRequests)
 		account.InputTokens = nonNegativeCounter(account.InputTokens)

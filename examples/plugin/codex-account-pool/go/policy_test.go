@@ -160,6 +160,18 @@ func TestNormalizeUsageDocumentRejectsBlankAccountID(t *testing.T) {
 	}
 }
 
+func TestNormalizeUsageDocumentRejectsDuplicateNormalizedAccountID(t *testing.T) {
+	_, err := normalizeUsageDocument(UsageDocument{
+		Accounts: map[string]AccountUsage{
+			"auth-a":   {Requests: 1},
+			" auth-a ": {Requests: 2},
+		},
+	})
+	if err == nil {
+		t.Fatal("normalizeUsageDocument() error = nil, want duplicate account id error")
+	}
+}
+
 func TestSaturatingAddCapsAtMaxInt64(t *testing.T) {
 	if got := saturatingAdd(math.MaxInt64-2, 10); got != math.MaxInt64 {
 		t.Fatalf("saturatingAdd() = %d, want %d", got, int64(math.MaxInt64))
