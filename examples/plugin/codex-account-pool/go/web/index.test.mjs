@@ -40,8 +40,15 @@ function createElement(id = "") {
     dataset: {},
     classList: new FakeClassList(),
     innerHTMLWrites: 0,
-    showModal() {},
-    close() {},
+    innerHTMLError: null,
+    showModalCalls: 0,
+    closeCalls: 0,
+    showModal() {
+      element.showModalCalls++;
+    },
+    close() {
+      element.closeCalls++;
+    },
     querySelector() {
       return createElement();
     },
@@ -57,6 +64,11 @@ function createElement(id = "") {
       return htmlValue;
     },
     set(value) {
+      if (element.innerHTMLError) {
+        const error = element.innerHTMLError;
+        element.innerHTMLError = null;
+        throw error;
+      }
       htmlValue = String(value);
       element.innerHTMLWrites++;
     }
@@ -104,6 +116,7 @@ function createHarness({ editableRow = false } = {}) {
   const pendingFetches = [];
   const timers = [];
   const rows = [];
+  const alerts = [];
   let nextTimerID = 0;
 
   const accountRows = createElement("accountRows");
@@ -190,7 +203,9 @@ function createHarness({ editableRow = false } = {}) {
       const timer = timers.find(item => item.id === id);
       if (timer) timer.cleared = true;
     },
-    alert() {}
+    alert(message) {
+      alerts.push(message);
+    }
   });
 
   vm.runInContext(`${pageScript}
@@ -200,6 +215,7 @@ function createHarness({ editableRow = false } = {}) {
       refreshAccounts,
       pollRefreshStatus,
       renderAccounts,
+      scheduleAccountPolling,
       setKey(value) { managementKey = value; },
       setAccounts(value) { accounts = value; },
       setCurrentProfile(value) { currentProfile = value; },
@@ -238,6 +254,10 @@ function createHarness({ editableRow = false } = {}) {
     handlers,
     pendingFetches,
     timers,
+    alerts,
+    element(id) {
+      return documentStub.getElementById(id);
+    },
     activeTimers(delay) {
       return timers.filter(timer => !timer.cleared && timer.delay === delay);
     },
@@ -300,12 +320,59 @@ test("superseded load error cannot replace a newer accounts success status", asy
   harness.resolve(loadRequests[0], { accounts: [account("old-account")] });
   harness.resolve(loadRequests[1], { error: "old profile failed" }, 500);
   harness.resolve(loadRequests[2], { decisions: [] });
-  assert.equal(await loading, false);
+  await assert.rejects(loading, /old profile failed/);
 
   const state = harness.api.state();
   assert.equal(state.connectionText, "已连接");
   assert.equal(state.connectionClass, "status success");
   assert.equal(state.accounts[0].id, "new-account");
+});
+
+test("connect keeps the dialog open when its current load fails after accounts refresh", async () => {
+  const harness = createHarness();
+  harness.element("keyInput").value = "test-key";
+
+  const connecting = harness.element("connectButton").onclick({
+    preventDefault() {}
+  });
+  const loadRequests = harness.pendingFetches.splice(0, 3);
+  const refreshing = harness.api.refreshAccounts();
+  const refreshRequest = harness.pendingFetches.shift();
+
+  harness.resolve(refreshRequest, { accounts: [account("new-account")] });
+  assert.equal(await refreshing, true);
+  harness.resolve(loadRequests[0], { accounts: [account("old-account")] });
+  harness.resolve(loadRequests[1], { error: "profile failed" }, 500);
+  harness.resolve(loadRequests[2], { decisions: [] });
+  await connecting;
+
+  assert.deepEqual(harness.alerts, ["profile failed"]);
+  assert.equal(harness.element("keyDialog").closeCalls, 0);
+  assert.equal(harness.api.state().connectionText, "已连接");
+  assert.equal(harness.api.state().connectionClass, "status success");
+});
+
+test("connect does not close the dialog when its load becomes stale", async () => {
+  const harness = createHarness();
+  harness.element("keyInput").value = "test-key";
+
+  const connecting = harness.element("connectButton").onclick({
+    preventDefault() {}
+  });
+  const connectRequests = harness.pendingFetches.splice(0, 3);
+  const newerLoad = harness.api.load();
+  const newerRequests = harness.pendingFetches.splice(0, 3);
+
+  harness.resolve(connectRequests[0], { accounts: [account("old-account")] });
+  harness.resolve(connectRequests[1], profile("old-profile"));
+  harness.resolve(connectRequests[2], { decisions: [] });
+  await connecting;
+  assert.equal(harness.element("keyDialog").closeCalls, 0);
+
+  harness.resolve(newerRequests[0], { accounts: [account("new-account")] });
+  harness.resolve(newerRequests[1], profile("new-profile"));
+  harness.resolve(newerRequests[2], { decisions: [] });
+  assert.equal(await newerLoad, true);
 });
 
 test("latest load still applies profile and decisions when accounts are superseded", async () => {
@@ -481,4 +548,23 @@ test("focused numeric edit survives account polling and stages all numeric field
   priorityInput.onblur();
   assert.equal(harness.accountRows.innerHTMLWrites, writesBeforePoll + 1);
   assert.match(harness.accountRows.innerHTML, /data-field="priority" value="777"/);
+});
+
+test("account polling reports unexpected errors and always schedules the next poll", async () => {
+  const harness = createHarness();
+  harness.api.setKey("test-key");
+  harness.api.scheduleAccountPolling();
+  const firstPoll = harness.activeTimers(5000)[0];
+  assert.ok(firstPoll);
+
+  harness.accountRows.innerHTMLError = new Error("render failed");
+  const polling = harness.fireTimer(firstPoll);
+  harness.resolve(harness.pendingFetches.shift(), {
+    accounts: [account("auth-a")]
+  });
+  await polling;
+
+  assert.equal(harness.api.state().connectionText, "render failed");
+  assert.equal(harness.api.state().connectionClass, "status error");
+  assert.equal(harness.activeTimers(5000).length, 1);
 });

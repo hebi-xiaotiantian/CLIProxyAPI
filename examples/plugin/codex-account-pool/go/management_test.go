@@ -822,6 +822,12 @@ func TestStaticResourceIncludesUsageDisplayAndPollingControls(t *testing.T) {
 		`tabindex="0"`,
 		`role="status" aria-live="polite"`,
 		"refreshPollTimer",
+		"latestSuccessfulAccountRequest",
+		"error.preserveConnectionStatus = true",
+		"if (error.preserveConnectionStatus) return",
+		"const loaded = await load()",
+		"if (!loaded) return",
+		"} finally {",
 		"5000",
 	} {
 		if !strings.Contains(text, required) {

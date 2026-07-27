@@ -600,6 +600,7 @@
     let refreshRequestGeneration = 0;
     let latestSuccessfulRefreshRequest = 0;
     let accountRequestSequence = 0;
+    let latestSuccessfulAccountRequest = 0;
     let loadSequence = 0;
     let activeRefreshPollGeneration = 0;
     let accountPollTimer = 0;
@@ -893,15 +894,20 @@
           applyAccountsResponse(accountRequest, accountResult.accountData);
         decisions = decisionData.decisions || [];
         updateProfile(profileData);
-        if (accountsUpdated) setConnectionStatus("已连接", "success");
         renderAccounts();
         renderDecisions();
+        if (accountsUpdated) {
+          latestSuccessfulAccountRequest = accountRequest.sequence;
+          setConnectionStatus("已连接", "success");
+        }
         scheduleAccountPolling();
         return true;
       } catch (error) {
         if (!loadIsCurrent(sequence, generation)) return false;
-        if (accountRequest && !accountRequestIsCurrent(accountRequest)) return false;
-        setConnectionStatus(error.message, "error");
+        if (accountRequest && accountRequest.sequence < latestSuccessfulAccountRequest) {
+          error.preserveConnectionStatus = true;
+        }
+        showError(error);
         throw error;
       }
     }
@@ -926,8 +932,9 @@
       if (!applyAccountsResponse(accountRequest, accountResult.accountData)) {
         return { applied: false, reason: "stale" };
       }
-      setConnectionStatus("已连接", "success");
       renderAccounts(true);
+      latestSuccessfulAccountRequest = accountRequest.sequence;
+      setConnectionStatus("已连接", "success");
       return { applied: true, reason: "applied" };
     }
 
@@ -962,8 +969,13 @@
       if (document.hidden || !managementKey || activeRefreshPollGeneration !== 0) return;
       accountPollTimer = setTimeout(async () => {
         accountPollTimer = 0;
-        await refreshAccounts();
-        scheduleAccountPolling();
+        try {
+          await refreshAccounts();
+        } catch (error) {
+          showError(error);
+        } finally {
+          scheduleAccountPolling();
+        }
       }, 5000);
     }
 
@@ -1137,6 +1149,7 @@
     }
 
     function showError(error) {
+      if (error.preserveConnectionStatus) return;
       setConnectionStatus(error.message, "error");
     }
 
@@ -1178,7 +1191,8 @@
       managementKey = $("keyInput").value;
       sessionStorage.setItem("codexPoolKey", managementKey);
       try {
-        await load();
+        const loaded = await load();
+        if (!loaded) return;
         $("keyDialog").close();
       } catch (error) {
         alert(error.message);
