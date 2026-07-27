@@ -136,12 +136,39 @@ func TestNormalizeUsageDocumentRejectsUnsupportedVersion(t *testing.T) {
 	}
 }
 
+func TestNormalizeUsageDocumentInitializesEmptyAccounts(t *testing.T) {
+	got, err := normalizeUsageDocument(UsageDocument{})
+	if err != nil {
+		t.Fatalf("normalizeUsageDocument() error = %v", err)
+	}
+	if got.Accounts == nil {
+		t.Fatal("normalizeUsageDocument() accounts = nil, want empty map")
+	}
+	if len(got.Accounts) != 0 {
+		t.Fatalf("normalizeUsageDocument() accounts = %#v, want empty map", got.Accounts)
+	}
+}
+
+func TestNormalizeUsageDocumentRejectsBlankAccountID(t *testing.T) {
+	_, err := normalizeUsageDocument(UsageDocument{
+		Accounts: map[string]AccountUsage{
+			" \t ": {},
+		},
+	})
+	if err == nil {
+		t.Fatal("normalizeUsageDocument() error = nil, want blank account id error")
+	}
+}
+
 func TestSaturatingAddCapsAtMaxInt64(t *testing.T) {
 	if got := saturatingAdd(math.MaxInt64-2, 10); got != math.MaxInt64 {
 		t.Fatalf("saturatingAdd() = %d, want %d", got, int64(math.MaxInt64))
 	}
 	if got := saturatingAdd(10, -1); got != 10 {
 		t.Fatalf("saturatingAdd() with negative delta = %d, want 10", got)
+	}
+	if got := saturatingAdd(-10, 3); got != 3 {
+		t.Fatalf("saturatingAdd() with negative current = %d, want 3", got)
 	}
 }
 
