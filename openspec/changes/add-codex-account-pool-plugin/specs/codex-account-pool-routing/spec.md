@@ -1,0 +1,101 @@
+## ADDED Requirements
+
+### Requirement: Codex-only scheduler ownership
+The plugin SHALL handle scheduler requests only when at least one candidate belongs to the Codex provider and SHALL leave unrelated provider requests unhandled.
+
+#### Scenario: Non-Codex scheduling request
+- **WHEN** the host invokes the plugin with candidates that do not belong to the Codex provider
+- **THEN** the plugin returns an unhandled scheduler response without changing candidate state
+
+### Requirement: Policy-based eligibility
+The plugin SHALL exclude accounts that are plugin-disabled, host-disabled, host-unavailable, outside the active profile, below a configured quota reserve, or associated with an unusable quota snapshot.
+
+#### Scenario: Disabled account
+- **WHEN** an account policy has `enabled` set to false
+- **THEN** the scheduler does not select that account
+
+#### Scenario: Quota reserve reached
+- **WHEN** either fresh five-hour remaining quota or fresh weekly remaining quota is below the account policy reserve
+- **THEN** the scheduler excludes the account until a later snapshot satisfies both reserves
+
+#### Scenario: Unknown account policy
+- **WHEN** a host candidate has no stored account policy
+- **THEN** the plugin treats it as enabled, regular, weight one, and uses the host candidate priority as its base priority
+
+### Requirement: Independent backup layer
+The plugin SHALL partition eligible accounts into regular and backup layers and SHALL select from the backup layer only when no regular account remains eligible for the current request.
+
+#### Scenario: High-priority backup does not preempt regular account
+- **WHEN** a backup account has a higher numeric priority than an eligible regular account
+- **THEN** the scheduler selects from the regular layer
+
+#### Scenario: Regular layer exhausted
+- **WHEN** every regular account is filtered or already tried
+- **THEN** the scheduler evaluates eligible backup accounts using the same profile, priority, and weight rules
+
+### Requirement: Route profiles
+The plugin SHALL support `paid-first`, `free-first`, `free-only`, and `custom` profiles without rewriting host auth files.
+
+#### Scenario: Free-first profile
+- **WHEN** `free-first` is active and eligible Free and paid regular accounts exist
+- **THEN** the scheduler evaluates the Free profile tier before the paid profile tier
+
+#### Scenario: Paid-first profile
+- **WHEN** `paid-first` is active and eligible Free and paid regular accounts exist
+- **THEN** the scheduler evaluates the paid profile tier before the Free profile tier
+
+#### Scenario: Free-only profile
+- **WHEN** `free-only` is active
+- **THEN** paid regular accounts are excluded while explicitly marked backup accounts remain eligible as the final layer
+
+#### Scenario: Temporary profile expires
+- **WHEN** a temporary profile override reaches its expiration time
+- **THEN** the scheduler atomically returns to the configured persistent profile
+
+### Requirement: Strict priority selection
+Within the selected account layer and profile tier, the plugin SHALL consider only accounts having the highest numeric priority.
+
+#### Scenario: Lower priority remains idle
+- **WHEN** priority 100 and priority 80 accounts are both eligible in the active layer and profile tier
+- **THEN** the scheduler selects only from priority 100 accounts
+
+#### Scenario: Higher priority becomes unavailable
+- **WHEN** all priority 100 accounts are excluded or already tried
+- **THEN** the scheduler proceeds to the next lower eligible priority
+
+### Requirement: Weighted selection
+The plugin SHALL use smooth weighted round-robin among accounts in the same active layer, profile tier, and priority.
+
+#### Scenario: Three-to-one weighting
+- **WHEN** two continuously eligible accounts have weights three and one in the same selection group
+- **THEN** repeated new-session selections converge to a three-to-one distribution without random selection
+
+#### Scenario: Invalid weight
+- **WHEN** an account policy contains a weight below one
+- **THEN** policy validation rejects the update
+
+### Requirement: Strict session affinity
+The plugin SHALL retain a session-to-account binding only while the bound account remains in the currently selected strict layer, profile tier, and priority group.
+
+#### Scenario: Affinity hit inside active group
+- **WHEN** a session has a non-expired binding to an eligible account in the current strict selection group
+- **THEN** the scheduler returns the bound account
+
+#### Scenario: Profile switch invalidates lower-tier affinity
+- **WHEN** a session is bound to a paid account and the active profile changes to `free-first` while a Free account is eligible
+- **THEN** the scheduler ignores the paid binding and creates a new binding in the Free tier
+
+#### Scenario: Bound account becomes unavailable
+- **WHEN** the bound account is no longer an eligible candidate
+- **THEN** the scheduler removes the binding and selects another account
+
+### Requirement: Retry-aware fallback
+The plugin SHALL make each scheduling decision from the candidate list supplied by the host and SHALL not reselect an account omitted by the host after a failed attempt.
+
+#### Scenario: Selected account fails
+- **WHEN** the host retries a request with the failed account removed from candidates
+- **THEN** the plugin selects the next eligible account according to the same strict ordering
+
+#### Scenario: No eligible account
+- **WHEN** the plugin owns a Codex scheduling request but no account is eligible
+- **THEN** the plugin returns a handled scheduling error rather than delegating to a scheduler that ignores quota policy

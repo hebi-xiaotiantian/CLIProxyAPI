@@ -1,0 +1,90 @@
+## ADDED Requirements
+
+### Requirement: Editable account pool table
+The plugin SHALL expose a browser resource that displays Codex accounts in one table with plan, quota, host status, plugin status, priority, weight, backup, enabled, and reserve controls.
+
+#### Scenario: Account table loads
+- **WHEN** an authorized operator opens the account pool resource and supplies a valid management key
+- **THEN** the page loads current account and quota state from authenticated Management API routes
+
+#### Scenario: Inline edit
+- **WHEN** the operator changes priority, weight, backup, enabled, or reserve values in a table row
+- **THEN** the page keeps the edit pending until the operator applies the change
+
+#### Scenario: Apply edits
+- **WHEN** the operator applies valid pending edits
+- **THEN** the plugin validates and atomically persists the policy update before replacing the active routing snapshot
+
+### Requirement: Filtering and batch editing
+The management resource SHALL allow operators to filter and select accounts and apply one validated change to all selected accounts.
+
+#### Scenario: Select all Free accounts
+- **WHEN** the operator filters detected plan `free` and selects all visible rows
+- **THEN** subsequent batch actions target every matching visible account
+
+#### Scenario: Batch priority and weight
+- **WHEN** the operator sets priority and weight for selected accounts
+- **THEN** the plugin applies both values atomically to all selected policies
+
+#### Scenario: Invalid batch update
+- **WHEN** any submitted batch value fails validation
+- **THEN** the plugin rejects the whole update and leaves all policies unchanged
+
+### Requirement: Profile controls
+The management resource SHALL expose persistent and temporary route-profile controls without modifying per-account base priorities.
+
+#### Scenario: Persistent Free-first selection
+- **WHEN** the operator activates `free-first` without an expiration
+- **THEN** the plugin persists it as the active profile and applies it to subsequent scheduling decisions
+
+#### Scenario: Temporary Free-first selection
+- **WHEN** the operator activates `free-first` with a duration
+- **THEN** the plugin applies the override immediately and displays its expiration time
+
+#### Scenario: Temporary override is cleared
+- **WHEN** the operator clears the override
+- **THEN** the persistent profile becomes effective immediately
+
+### Requirement: Quota controls and diagnostics
+The management resource SHALL provide manual quota refresh, next-refresh visibility, snapshot freshness, sanitized errors, and per-account refresh status.
+
+#### Scenario: Refresh selected accounts
+- **WHEN** the operator selects accounts and invokes refresh
+- **THEN** the page shows queued, refreshing, succeeded, or failed state for each selected account
+
+#### Scenario: Refresh error is displayed
+- **WHEN** an account refresh fails
+- **THEN** the page displays a sanitized error without exposing tokens or raw credential JSON
+
+### Requirement: Scheduling preview
+The management API SHALL return an ordered, non-mutating scheduling preview for a supplied model and optional session identifier.
+
+#### Scenario: Preview current order
+- **WHEN** an operator requests a preview
+- **THEN** the response lists filtered reasons, regular and backup layers, active profile tiers, strict priority groups, and the predicted first choice
+
+#### Scenario: Preview does not consume weight
+- **WHEN** a preview is requested repeatedly
+- **THEN** smooth weighted round-robin counters and session bindings remain unchanged
+
+### Requirement: Management API security
+Account data and state-changing operations SHALL be available only through authenticated Management API routes, while the browser resource SHALL contain static assets only.
+
+#### Scenario: Resource is fetched without management authentication
+- **WHEN** a client requests the plugin browser resource
+- **THEN** the returned HTML contains no account identifiers, emails, quota data, policy state, or credential data
+
+#### Scenario: API request lacks a valid management key
+- **WHEN** a client calls an account-pool Management API route without valid host management authentication
+- **THEN** the host rejects the request before plugin state is read or changed
+
+### Requirement: Configuration recovery
+The plugin SHALL retain the previous valid policy state when persisted policy loading or a management update fails.
+
+#### Scenario: Corrupt policy file
+- **WHEN** the plugin starts with an unreadable or invalid policy file
+- **THEN** it reports degraded state, keeps a safe in-memory default, and does not overwrite the corrupt file automatically
+
+#### Scenario: Atomic write fails
+- **WHEN** persisting a policy update fails
+- **THEN** the plugin returns an error and continues using the prior in-memory policy snapshot
