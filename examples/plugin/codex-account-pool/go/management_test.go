@@ -769,7 +769,7 @@ func TestManagementRejectsInvalidRefreshPlan(t *testing.T) {
 	}
 }
 
-func TestStaticResourceIncludesBulkReserveAndTemporaryControls(t *testing.T) {
+func TestStaticResourceIncludesUsageDisplayAndPollingControls(t *testing.T) {
 	text := string(accountPoolHTML)
 	for _, required := range []string{
 		"batchFiveHourReserve",
@@ -780,10 +780,31 @@ func TestStaticResourceIncludesBulkReserveAndTemporaryControls(t *testing.T) {
 		"pollRefreshStatus",
 		"five_hour_window_present",
 		"weekly_window_present",
+		`<th class="usage">Token 用量</th>`,
+		"usageCell",
+		"formatTokens",
+		"代理累计",
+		"usage.total_tokens",
+		"usage.input_tokens",
+		"usage.output_tokens",
+		"usage.reasoning_tokens",
+		"usage.cache_tokens",
+		"usage.requests",
+		"usage.failed_requests",
+		"usage.updated_at",
+		"document.hidden",
+		`document.addEventListener("visibilitychange"`,
+		"scheduleAccountPolling",
+		"async function refreshAccounts(generation = null)",
+		"refreshAccounts(generation)",
+		"5000",
 	} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("static resource is missing %q", required)
 		}
+	}
+	if count := strings.Count(text, "pending.clear()"); count != 1 {
+		t.Fatalf("pending.clear() count = %d, want 1 only after a successful apply", count)
 	}
 }
 

@@ -160,7 +160,7 @@
       box-shadow: var(--shadow);
     }
     table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-    .account-table { min-width: 1220px; }
+    .account-table { min-width: 1470px; }
     .decision-table { min-width: 900px; }
     .preview-table { min-width: 940px; }
     th, td {
@@ -185,9 +185,10 @@
     tbody tr.active-group { background: #eef8f4; }
     .check { width: 38px; text-align: center; }
     .account { width: 245px; }
-    .plan { width: 100px; }
+    .plan { width: 88px; }
     .quota { width: 110px; }
-    .state { width: 116px; }
+    .usage { width: 250px; }
+    .state { width: 108px; }
     .number { width: 90px; }
     .toggle { width: 72px; text-align: center; }
     .account-name { overflow: hidden; font-weight: 680; text-overflow: ellipsis; white-space: nowrap; }
@@ -198,6 +199,14 @@
       font-size: 11px;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    .usage-total { font-weight: 700; white-space: nowrap; }
+    .usage-detail {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.4;
+      white-space: normal;
     }
     .pill {
       display: inline-flex;
@@ -447,6 +456,7 @@
             <th class="plan">套餐</th>
             <th class="quota">5 小时</th>
             <th class="quota">周额度</th>
+            <th class="usage">Token 用量</th>
             <th class="state">状态</th>
             <th class="number">优先级</th>
             <th class="number">权重</th>
@@ -457,7 +467,7 @@
           </tr>
         </thead>
         <tbody id="accountRows">
-          <tr><td colspan="12" class="empty">输入管理密钥后加载账号</td></tr>
+          <tr><td colspan="13" class="empty">输入管理密钥后加载账号</td></tr>
         </tbody>
       </table>
     </div>
@@ -589,6 +599,7 @@
     let refreshPollGeneration = 0;
     let refreshRequestGeneration = 0;
     let latestSuccessfulRefreshRequest = 0;
+    let accountPollTimer = 0;
 
     const $ = id => document.getElementById(id);
     const escapeHTML = value => String(value ?? "").replace(/[&<>"']/g, character => ({
@@ -623,6 +634,42 @@
       return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
     }
 
+    function formatTokens(value) {
+      const amount = Math.max(0, Number(value) || 0);
+      for (const [divisor, suffix] of [[1e9, "B"], [1e6, "M"], [1e3, "K"]]) {
+        if (amount >= divisor) {
+          return `${(amount / divisor).toFixed(2).replace(/\.?0+$/, "")}${suffix}`;
+        }
+      }
+      return String(Math.trunc(amount));
+    }
+
+    function exactTokens(value) {
+      return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 })
+        .format(Math.max(0, Number(value) || 0));
+    }
+
+    function usageCell(usage) {
+      if (!usage) return '<span class="status">--</span>';
+      const updated = shortTime(usage.updated_at) || "--";
+      const details = [
+        "代理累计用量（仅本 CLIProxyAPI 实例）",
+        `总量：${exactTokens(usage.total_tokens)}`,
+        `输入：${exactTokens(usage.input_tokens)}`,
+        `输出：${exactTokens(usage.output_tokens)}`,
+        `推理：${exactTokens(usage.reasoning_tokens)}`,
+        `缓存：${exactTokens(usage.cache_tokens)}`,
+        `请求：${exactTokens(usage.requests)}`,
+        `失败：${exactTokens(usage.failed_requests)}`,
+        `更新：${updated}`
+      ].join("\n");
+      return `
+        <div title="${escapeHTML(details)}" aria-label="${escapeHTML(details)}">
+          <div class="usage-total">代理累计 · 总量 ${formatTokens(usage.total_tokens)}</div>
+          <div class="usage-detail">输入 ${formatTokens(usage.input_tokens)} · 输出 ${formatTokens(usage.output_tokens)} · 推理 ${formatTokens(usage.reasoning_tokens)} · 缓存 ${formatTokens(usage.cache_tokens)}</div>
+        </div>`;
+    }
+
     function quotaCell(value, present) {
       if (!present) return '<span class="status">--</span>';
       const amount = Number(value || 0);
@@ -652,7 +699,7 @@
       $("summary").textContent = `显示 ${rows.length} / ${accounts.length} 个账号`;
       updateBatch();
       if (!rows.length) {
-        $("accountRows").innerHTML = '<tr><td colspan="12" class="empty">没有符合条件的账号</td></tr>';
+        $("accountRows").innerHTML = '<tr><td colspan="13" class="empty">没有符合条件的账号</td></tr>';
         return;
       }
       $("accountRows").innerHTML = rows.map(account => {
@@ -680,6 +727,7 @@
             <td><span class="pill ${escapeHTML(account.plan)}">${escapeHTML(account.plan_type || account.plan)}</span></td>
             <td>${quotaCell(account.five_hour_remaining, account.five_hour_window_present)}</td>
             <td>${quotaCell(account.weekly_remaining, account.weekly_window_present)}</td>
+            <td class="usage">${usageCell(account.usage)}</td>
             <td>
               <span class="pill ${statusClass}">${status}</span>
               ${detail ? `<div class="cell-sub" title="${escapeHTML(detail)}">${escapeHTML(detail)}</div>` : ""}
@@ -768,6 +816,11 @@
       }).join("");
     }
 
+    function setConnectionStatus(message, className = "") {
+      $("connectionStatus").textContent = message;
+      $("connectionStatus").className = `status${className ? ` ${className}` : ""}`;
+    }
+
     async function load(generation = null) {
       try {
         const [accountData, profileData, decisionData] = await Promise.all([
@@ -779,17 +832,41 @@
         accounts = accountData.accounts || [];
         decisions = decisionData.decisions || [];
         updateProfile(profileData);
-        $("connectionStatus").textContent = "已连接";
-        $("connectionStatus").className = "status success";
+        setConnectionStatus("已连接", "success");
         renderAccounts();
         renderDecisions();
+        scheduleAccountPolling();
         return true;
       } catch (error) {
         if (generation !== null && generation !== refreshPollGeneration) return false;
-        $("connectionStatus").textContent = error.message;
-        $("connectionStatus").className = "status error";
+        setConnectionStatus(error.message, "error");
         throw error;
       }
+    }
+
+    async function refreshAccounts(generation = null) {
+      if (document.hidden || !managementKey) return false;
+      try {
+        const accountData = await api("/accounts");
+        if (document.hidden || (generation !== null && generation !== refreshPollGeneration)) return false;
+        accounts = accountData.accounts || [];
+        setConnectionStatus("已连接", "success");
+        renderAccounts();
+        return true;
+      } catch (error) {
+        if (document.hidden || (generation !== null && generation !== refreshPollGeneration)) return false;
+        setConnectionStatus(error.message, "error");
+        return false;
+      }
+    }
+
+    function scheduleAccountPolling() {
+      clearTimeout(accountPollTimer);
+      if (document.hidden || !managementKey) return;
+      accountPollTimer = setTimeout(async () => {
+        await refreshAccounts();
+        scheduleAccountPolling();
+      }, 5000);
     }
 
     async function applyPending() {
@@ -838,7 +915,7 @@
 
     async function pollRefreshStatus(generation, attempt = 0) {
       if (generation !== refreshPollGeneration) return;
-      const loaded = await load(generation);
+      const loaded = await refreshAccounts(generation);
       if (!loaded) return;
       const active = accounts.some(account => ["queued", "refreshing"].includes(account.refresh?.state));
       if (active && attempt < 59) {
@@ -938,8 +1015,7 @@
     }
 
     function showError(error) {
-      $("connectionStatus").textContent = error.message;
-      $("connectionStatus").className = "status error";
+      setConnectionStatus(error.message, "error");
     }
 
     $("applyButton").onclick = () => applyPending().catch(showError);
@@ -986,6 +1062,13 @@
         alert(error.message);
       }
     };
+
+    document.addEventListener("visibilitychange", () => {
+      clearTimeout(accountPollTimer);
+      if (!document.hidden && managementKey) {
+        refreshAccounts().finally(scheduleAccountPolling);
+      }
+    });
 
     if (managementKey) {
       load().catch(() => $("keyDialog").showModal());
