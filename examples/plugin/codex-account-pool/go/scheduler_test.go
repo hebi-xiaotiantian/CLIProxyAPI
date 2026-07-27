@@ -9,6 +9,104 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
+func TestNormalizePolicyDocumentAcceptsAutomaticProfiles(t *testing.T) {
+	profiles := []RouteProfile{
+		ProfileAuto,
+		ProfileQuotaHighFirst,
+		ProfileQuotaLowFirst,
+		ProfilePlanHighFirst,
+		ProfilePlanLowFirst,
+	}
+	for _, profile := range profiles {
+		doc := defaultPolicyDocument()
+		doc.ActiveProfile = profile
+		if _, err := normalizePolicyDocument(doc); err != nil {
+			t.Fatalf("normalizePolicyDocument(%q) error = %v", profile, err)
+		}
+	}
+}
+
+func TestPlanRank(t *testing.T) {
+	tests := []struct {
+		raw  string
+		rank int
+		ok   bool
+	}{
+		{raw: "free", rank: 100, ok: true},
+		{raw: "Go", rank: 200, ok: true},
+		{raw: "plus", rank: 300, ok: true},
+		{raw: "team", rank: 300, ok: true},
+		{raw: "business", rank: 300, ok: true},
+		{raw: "pro", rank: 400, ok: true},
+		{raw: "pro_lite", rank: 400, ok: true},
+		{raw: "pro-max", rank: 500, ok: true},
+		{raw: "enterprise", rank: 600, ok: true},
+		{raw: "edu-enterprise", rank: 600, ok: true},
+		{raw: "mystery", rank: 0, ok: false},
+	}
+	for _, test := range tests {
+		t.Run(test.raw, func(t *testing.T) {
+			rank, ok := planRank(test.raw)
+			if rank != test.rank || ok != test.ok {
+				t.Fatalf("planRank(%q) = %d, %v; want %d, %v", test.raw, rank, ok, test.rank, test.ok)
+			}
+		})
+	}
+}
+
+func TestQuotaScoreUsesMinimumPresentWindow(t *testing.T) {
+	tests := []struct {
+		name     string
+		snapshot QuotaSnapshot
+		score    int
+		ok       bool
+	}{
+		{
+			name: "both",
+			snapshot: QuotaSnapshot{
+				FiveHourRemaining:     70,
+				WeeklyRemaining:       40,
+				FiveHourWindowPresent: true,
+				WeeklyWindowPresent:   true,
+			},
+			score: 40,
+			ok:    true,
+		},
+		{
+			name: "five-hour-only",
+			snapshot: QuotaSnapshot{
+				FiveHourRemaining:     65,
+				FiveHourWindowPresent: true,
+			},
+			score: 65,
+			ok:    true,
+		},
+		{
+			name: "weekly-only",
+			snapshot: QuotaSnapshot{
+				WeeklyRemaining:     55,
+				WeeklyWindowPresent: true,
+			},
+			score: 55,
+			ok:    true,
+		},
+		{
+			name:     "missing",
+			snapshot: QuotaSnapshot{},
+			score:    0,
+			ok:       false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			score, ok := quotaScore(test.snapshot)
+			if score != test.score || ok != test.ok {
+				t.Fatalf("quotaScore() = %d, %v; want %d, %v", score, ok, test.score, test.ok)
+			}
+		})
+	}
+}
+
 func TestSchedulerLeavesNonCodexRequestUnhandled(t *testing.T) {
 	selector := newSelector(time.Now)
 	resp, err := selector.pick(pluginapi.SchedulerPickRequest{
@@ -66,6 +164,263 @@ func TestSchedulerFreeFirstOverridesBasePriority(t *testing.T) {
 	}
 }
 
+func TestSchedulerAutoUsesPlanThenQuota(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	policy := automaticPolicy(ProfileAuto,
+		map[string]AccountPolicy{
+			"free-high-quota": {Enabled: true, Priority: 999, Weight: 9},
+			"pro-low-quota":   {Enabled: true, Priority: 1, Weight: 1},
+		},
+	)
+	quota := freshQuota(now,
+		QuotaSnapshot{AuthID: "free-high-quota", Plan: PlanFree, PlanType: "free", FiveHourRemaining: 95, WeeklyRemaining: 95},
+		QuotaSnapshot{AuthID: "pro-low-quota", Plan: PlanPaid, PlanType: "pro", FiveHourRemaining: 30, WeeklyRemaining: 30},
+	)
+
+	resp, err := newSelector(func() time.Time { return now }).pick(
+		codexRequest("free-high-quota", "pro-low-quota"),
+		policy,
+		quota,
+		defaultConfig(),
+	)
+	if err != nil {
+		t.Fatalf("pick() error = %v", err)
+	}
+	if resp.AuthID != "pro-low-quota" {
+		t.Fatalf("pick() auth = %q, want pro-low-quota", resp.AuthID)
+	}
+}
+
+func TestSchedulerQuotaHighFirstUsesQuotaThenPlan(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	policy := automaticPolicy(ProfileQuotaHighFirst,
+		map[string]AccountPolicy{
+			"free-high": {Enabled: true, Priority: 1, Weight: 1},
+			"pro-low":   {Enabled: true, Priority: 999, Weight: 9},
+		},
+	)
+	quota := freshQuota(now,
+		QuotaSnapshot{AuthID: "free-high", Plan: PlanFree, PlanType: "free", FiveHourRemaining: 90, WeeklyRemaining: 90},
+		QuotaSnapshot{AuthID: "pro-low", Plan: PlanPaid, PlanType: "pro", FiveHourRemaining: 70, WeeklyRemaining: 70},
+	)
+
+	resp, err := newSelector(func() time.Time { return now }).pick(
+		codexRequest("free-high", "pro-low"),
+		policy,
+		quota,
+		defaultConfig(),
+	)
+	if err != nil {
+		t.Fatalf("pick() error = %v", err)
+	}
+	if resp.AuthID != "free-high" {
+		t.Fatalf("pick() auth = %q, want free-high", resp.AuthID)
+	}
+}
+
+func TestSchedulerQuotaLowFirstUsesLowestEligibleQuota(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	policy := automaticPolicy(ProfileQuotaLowFirst,
+		map[string]AccountPolicy{
+			"free-low": {Enabled: true, Priority: 1, Weight: 1},
+			"pro-high": {Enabled: true, Priority: 999, Weight: 9},
+		},
+	)
+	quota := freshQuota(now,
+		QuotaSnapshot{AuthID: "free-low", Plan: PlanFree, PlanType: "free", FiveHourRemaining: 20, WeeklyRemaining: 20},
+		QuotaSnapshot{AuthID: "pro-high", Plan: PlanPaid, PlanType: "pro", FiveHourRemaining: 80, WeeklyRemaining: 80},
+	)
+
+	resp, err := newSelector(func() time.Time { return now }).pick(
+		codexRequest("free-low", "pro-high"),
+		policy,
+		quota,
+		defaultConfig(),
+	)
+	if err != nil {
+		t.Fatalf("pick() error = %v", err)
+	}
+	if resp.AuthID != "free-low" {
+		t.Fatalf("pick() auth = %q, want free-low", resp.AuthID)
+	}
+}
+
+func TestSchedulerPlanHighFirstUsesHighestPlanThenQuota(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	policy := automaticPolicy(ProfilePlanHighFirst,
+		map[string]AccountPolicy{
+			"enterprise-low": {Enabled: true, Priority: 1, Weight: 1},
+			"pro-high":       {Enabled: true, Priority: 999, Weight: 9},
+		},
+	)
+	quota := freshQuota(now,
+		QuotaSnapshot{AuthID: "enterprise-low", Plan: PlanPaid, PlanType: "enterprise", FiveHourRemaining: 20, WeeklyRemaining: 20},
+		QuotaSnapshot{AuthID: "pro-high", Plan: PlanPaid, PlanType: "pro", FiveHourRemaining: 90, WeeklyRemaining: 90},
+	)
+
+	resp, err := newSelector(func() time.Time { return now }).pick(
+		codexRequest("enterprise-low", "pro-high"),
+		policy,
+		quota,
+		defaultConfig(),
+	)
+	if err != nil {
+		t.Fatalf("pick() error = %v", err)
+	}
+	if resp.AuthID != "enterprise-low" {
+		t.Fatalf("pick() auth = %q, want enterprise-low", resp.AuthID)
+	}
+}
+
+func TestSchedulerPlanLowFirstUsesLowestPlanThenQuota(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	policy := automaticPolicy(ProfilePlanLowFirst,
+		map[string]AccountPolicy{
+			"free-low":  {Enabled: true, Priority: 1, Weight: 1},
+			"plus-high": {Enabled: true, Priority: 999, Weight: 9},
+		},
+	)
+	quota := freshQuota(now,
+		QuotaSnapshot{AuthID: "free-low", Plan: PlanFree, PlanType: "free", FiveHourRemaining: 20, WeeklyRemaining: 20},
+		QuotaSnapshot{AuthID: "plus-high", Plan: PlanPaid, PlanType: "plus", FiveHourRemaining: 90, WeeklyRemaining: 90},
+	)
+
+	resp, err := newSelector(func() time.Time { return now }).pick(
+		codexRequest("free-low", "plus-high"),
+		policy,
+		quota,
+		defaultConfig(),
+	)
+	if err != nil {
+		t.Fatalf("pick() error = %v", err)
+	}
+	if resp.AuthID != "free-low" {
+		t.Fatalf("pick() auth = %q, want free-low", resp.AuthID)
+	}
+}
+
+func TestSchedulerAutomaticUnknownMetricsSortLast(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	t.Run("unknown quota", func(t *testing.T) {
+		policy := automaticPolicy(ProfileQuotaHighFirst,
+			map[string]AccountPolicy{
+				"known-quota":   {Enabled: true, Priority: 1, Weight: 1},
+				"unknown-quota": {Enabled: true, Priority: 999, Weight: 9},
+			},
+		)
+		quota := freshQuota(now,
+			QuotaSnapshot{AuthID: "known-quota", Plan: PlanFree, PlanType: "free", FiveHourRemaining: 10, WeeklyRemaining: 10},
+		)
+		quota.Accounts["unknown-quota"] = QuotaSnapshot{
+			AuthID:      "unknown-quota",
+			Plan:        PlanPaid,
+			PlanType:    "enterprise",
+			RefreshedAt: now,
+		}
+		cfg := defaultConfig()
+		cfg.StalePolicy = StaleAllow
+
+		resp, err := newSelector(func() time.Time { return now }).pick(
+			codexRequest("known-quota", "unknown-quota"),
+			policy,
+			quota,
+			cfg,
+		)
+		if err != nil {
+			t.Fatalf("pick() error = %v", err)
+		}
+		if resp.AuthID != "known-quota" {
+			t.Fatalf("pick() auth = %q, want known-quota", resp.AuthID)
+		}
+	})
+
+	t.Run("unknown plan", func(t *testing.T) {
+		policy := automaticPolicy(ProfilePlanHighFirst,
+			map[string]AccountPolicy{
+				"known-plan":   {Enabled: true, Priority: 1, Weight: 1},
+				"unknown-plan": {Enabled: true, Priority: 999, Weight: 9},
+			},
+		)
+		quota := freshQuota(now,
+			QuotaSnapshot{AuthID: "known-plan", Plan: PlanFree, PlanType: "free", FiveHourRemaining: 10, WeeklyRemaining: 10},
+			QuotaSnapshot{AuthID: "unknown-plan", Plan: PlanPaid, PlanType: "mystery", FiveHourRemaining: 99, WeeklyRemaining: 99},
+		)
+
+		resp, err := newSelector(func() time.Time { return now }).pick(
+			codexRequest("known-plan", "unknown-plan"),
+			policy,
+			quota,
+			defaultConfig(),
+		)
+		if err != nil {
+			t.Fatalf("pick() error = %v", err)
+		}
+		if resp.AuthID != "known-plan" {
+			t.Fatalf("pick() auth = %q, want known-plan", resp.AuthID)
+		}
+	})
+}
+
+func TestSchedulerAutomaticReserveFilteringPrecedesOrdering(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	policy := automaticPolicy(ProfileQuotaLowFirst,
+		map[string]AccountPolicy{
+			"below-reserve": {
+				Enabled: true, Priority: 999, Weight: 9,
+				FiveHourReserve: 10, WeeklyReserve: 10,
+			},
+			"eligible": {
+				Enabled: true, Priority: 1, Weight: 1,
+				FiveHourReserve: 10, WeeklyReserve: 10,
+			},
+		},
+	)
+	quota := freshQuota(now,
+		QuotaSnapshot{AuthID: "below-reserve", Plan: PlanPaid, PlanType: "pro", FiveHourRemaining: 5, WeeklyRemaining: 50},
+		QuotaSnapshot{AuthID: "eligible", Plan: PlanPaid, PlanType: "plus", FiveHourRemaining: 30, WeeklyRemaining: 30},
+	)
+
+	resp, err := newSelector(func() time.Time { return now }).pick(
+		codexRequest("below-reserve", "eligible"),
+		policy,
+		quota,
+		defaultConfig(),
+	)
+	if err != nil {
+		t.Fatalf("pick() error = %v", err)
+	}
+	if resp.AuthID != "eligible" {
+		t.Fatalf("pick() auth = %q, want eligible", resp.AuthID)
+	}
+}
+
+func TestSchedulerAutomaticKeepsBackupIndependent(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	policy := automaticPolicy(ProfileQuotaLowFirst,
+		map[string]AccountPolicy{
+			"regular": {Enabled: true, Priority: 1, Weight: 1},
+			"backup":  {Enabled: true, Priority: 999, Weight: 9, Backup: true},
+		},
+	)
+	quota := freshQuota(now,
+		QuotaSnapshot{AuthID: "regular", Plan: PlanPaid, PlanType: "pro", FiveHourRemaining: 90, WeeklyRemaining: 90},
+		QuotaSnapshot{AuthID: "backup", Plan: PlanFree, PlanType: "free", FiveHourRemaining: 10, WeeklyRemaining: 10},
+	)
+
+	resp, err := newSelector(func() time.Time { return now }).pick(
+		codexRequest("regular", "backup"),
+		policy,
+		quota,
+		defaultConfig(),
+	)
+	if err != nil {
+		t.Fatalf("pick() error = %v", err)
+	}
+	if resp.AuthID != "regular" {
+		t.Fatalf("pick() auth = %q, want regular", resp.AuthID)
+	}
+}
+
 func TestSchedulerUsesHighestPriorityWithinTier(t *testing.T) {
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	policy := defaultPolicyDocument()
@@ -108,6 +463,71 @@ func TestSchedulerSmoothWeightedRoundRobin(t *testing.T) {
 	}
 	if counts["heavy"] != 30 || counts["light"] != 10 {
 		t.Fatalf("weighted counts = %#v, want 30/10", counts)
+	}
+}
+
+func TestSchedulerAutomaticExactTieRotatesEquallyAndIgnoresWeight(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	policy := automaticPolicy(ProfileQuotaHighFirst,
+		map[string]AccountPolicy{
+			"heavy": {Enabled: true, Priority: 999, Weight: 9},
+			"light": {Enabled: true, Priority: 1, Weight: 1},
+		},
+	)
+	quota := freshQuota(now,
+		QuotaSnapshot{AuthID: "heavy", Plan: PlanPaid, PlanType: "plus", FiveHourRemaining: 80, WeeklyRemaining: 70},
+		QuotaSnapshot{AuthID: "light", Plan: PlanPaid, PlanType: "plus", FiveHourRemaining: 70, WeeklyRemaining: 80},
+	)
+	selector := newSelector(func() time.Time { return now })
+	counts := map[string]int{}
+	for range 20 {
+		resp, err := selector.pick(codexRequest("heavy", "light"), policy, quota, defaultConfig())
+		if err != nil {
+			t.Fatalf("pick() error = %v", err)
+		}
+		counts[resp.AuthID]++
+	}
+	if counts["heavy"] != 10 || counts["light"] != 10 {
+		t.Fatalf("automatic tie counts = %#v, want 10/10", counts)
+	}
+}
+
+func TestSchedulerAutomaticScoreChangeInvalidatesAffinity(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	policy := automaticPolicy(ProfileQuotaLowFirst,
+		map[string]AccountPolicy{
+			"a": {Enabled: true, Priority: 100, Weight: 1},
+			"b": {Enabled: true, Priority: 100, Weight: 1},
+		},
+	)
+	quota := freshQuota(now,
+		QuotaSnapshot{AuthID: "a", Plan: PlanPaid, PlanType: "plus", FiveHourRemaining: 20, WeeklyRemaining: 20},
+		QuotaSnapshot{AuthID: "b", Plan: PlanPaid, PlanType: "plus", FiveHourRemaining: 40, WeeklyRemaining: 40},
+	)
+	selector := newSelector(func() time.Time { return now })
+	req := codexRequest("a", "b")
+	headers := http.Header{}
+	headers.Set("X-Session-ID", "automatic-session")
+	req.Options.Headers = headers
+
+	first, err := selector.pick(req, policy, quota, defaultConfig())
+	if err != nil {
+		t.Fatalf("first pick() error = %v", err)
+	}
+	if first.AuthID != "a" {
+		t.Fatalf("first auth = %q, want a", first.AuthID)
+	}
+
+	quota = freshQuota(now,
+		QuotaSnapshot{AuthID: "a", Plan: PlanPaid, PlanType: "plus", FiveHourRemaining: 60, WeeklyRemaining: 60},
+		QuotaSnapshot{AuthID: "b", Plan: PlanPaid, PlanType: "plus", FiveHourRemaining: 10, WeeklyRemaining: 10},
+	)
+	second, err := selector.pick(req, policy, quota, defaultConfig())
+	if err != nil {
+		t.Fatalf("second pick() error = %v", err)
+	}
+	if second.AuthID != "b" {
+		t.Fatalf("second auth = %q, want b", second.AuthID)
 	}
 }
 
@@ -315,5 +735,12 @@ func freshQuota(now time.Time, snapshots ...QuotaSnapshot) QuotaDocument {
 		}
 		doc.Accounts[snapshot.AuthID] = snapshot
 	}
+	return doc
+}
+
+func automaticPolicy(profile RouteProfile, accounts map[string]AccountPolicy) PolicyDocument {
+	doc := defaultPolicyDocument()
+	doc.ActiveProfile = profile
+	doc.Accounts = accounts
 	return doc
 }

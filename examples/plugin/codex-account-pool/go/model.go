@@ -11,10 +11,15 @@ const stateVersion = 1
 type RouteProfile string
 
 const (
-	ProfilePaidFirst RouteProfile = "paid-first"
-	ProfileFreeFirst RouteProfile = "free-first"
-	ProfileFreeOnly  RouteProfile = "free-only"
-	ProfileCustom    RouteProfile = "custom"
+	ProfileAuto           RouteProfile = "auto"
+	ProfileQuotaHighFirst RouteProfile = "quota-high-first"
+	ProfileQuotaLowFirst  RouteProfile = "quota-low-first"
+	ProfilePlanHighFirst  RouteProfile = "plan-high-first"
+	ProfilePlanLowFirst   RouteProfile = "plan-low-first"
+	ProfilePaidFirst      RouteProfile = "paid-first"
+	ProfileFreeFirst      RouteProfile = "free-first"
+	ProfileFreeOnly       RouteProfile = "free-only"
+	ProfileCustom         RouteProfile = "custom"
 )
 
 type PlanKind string
@@ -257,7 +262,24 @@ func effectiveProfile(doc PolicyDocument, now time.Time) RouteProfile {
 
 func validProfile(profile RouteProfile) bool {
 	switch profile {
-	case ProfilePaidFirst, ProfileFreeFirst, ProfileFreeOnly, ProfileCustom:
+	case ProfileAuto,
+		ProfileQuotaHighFirst,
+		ProfileQuotaLowFirst,
+		ProfilePlanHighFirst,
+		ProfilePlanLowFirst,
+		ProfilePaidFirst,
+		ProfileFreeFirst,
+		ProfileFreeOnly,
+		ProfileCustom:
+		return true
+	default:
+		return false
+	}
+}
+
+func isAutomaticProfile(profile RouteProfile) bool {
+	switch profile {
+	case ProfileAuto, ProfileQuotaHighFirst, ProfileQuotaLowFirst, ProfilePlanHighFirst, ProfilePlanLowFirst:
 		return true
 	default:
 		return false

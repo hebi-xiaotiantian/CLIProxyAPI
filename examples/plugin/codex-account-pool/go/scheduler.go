@@ -29,12 +29,16 @@ type affinityEntry struct {
 }
 
 type selectionCandidate struct {
-	ID       string
-	Policy   AccountPolicy
-	Plan     PlanKind
-	Backup   bool
-	Tier     int
-	Priority int
+	ID         string
+	Policy     AccountPolicy
+	Plan       PlanKind
+	Backup     bool
+	Tier       int
+	Priority   int
+	PlanRank   int
+	PlanKnown  bool
+	QuotaScore int
+	QuotaKnown bool
 }
 
 func newSelector(now func() time.Time) *selector {
@@ -94,7 +98,7 @@ func (s *selector) pick(req pluginapi.SchedulerPickRequest, policy PolicyDocumen
 		return pluginapi.SchedulerPickResponse{}, fmt.Errorf("codex account pool has no eligible account")
 	}
 
-	group := strictGroup(eligible)
+	group := selectionGroup(profile, eligible)
 	if len(group) == 0 {
 		return pluginapi.SchedulerPickResponse{}, fmt.Errorf("codex account pool has no selectable account")
 	}
@@ -104,7 +108,12 @@ func (s *selector) pick(req pluginapi.SchedulerPickRequest, policy PolicyDocumen
 			return pluginapi.SchedulerPickResponse{Handled: true, AuthID: authID}, nil
 		}
 	}
-	authID := s.weightedPick(policy.Revision, profile, group)
+	authID := ""
+	if isAutomaticProfile(profile) {
+		authID = s.equalPick(policy.Revision, profile, group)
+	} else {
+		authID = s.weightedPick(policy.Revision, profile, group)
+	}
 	if sessionKey != "" {
 		s.bindAffinity(sessionKey, authID, policy.Revision, now.Add(cfg.AffinityTTL))
 	}
@@ -146,17 +155,30 @@ func classifyCandidateWithReason(candidate pluginapi.SchedulerAuthCandidate, pol
 		}
 	}
 
-	tier, ok := profileTier(profile, plan, policy.Backup, customOrder)
-	if !ok {
-		return selectionCandidate{}, false, "profile_excluded"
+	tier := 0
+	if !isAutomaticProfile(profile) {
+		var ok bool
+		tier, ok = profileTier(profile, plan, policy.Backup, customOrder)
+		if !ok {
+			return selectionCandidate{}, false, "profile_excluded"
+		}
 	}
+	rank, rankKnown := planRank(snapshot.PlanType)
+	if !rankKnown && plan == PlanFree {
+		rank, rankKnown = planRank(string(PlanFree))
+	}
+	score, scoreKnown := quotaScore(snapshot)
 	return selectionCandidate{
-		ID:       candidate.ID,
-		Policy:   policy,
-		Plan:     plan,
-		Backup:   policy.Backup,
-		Tier:     tier,
-		Priority: policy.Priority,
+		ID:         candidate.ID,
+		Policy:     policy,
+		Plan:       plan,
+		Backup:     policy.Backup,
+		Tier:       tier,
+		Priority:   policy.Priority,
+		PlanRank:   rank,
+		PlanKnown:  rankKnown,
+		QuotaScore: score,
+		QuotaKnown: scoreKnown,
 	}, true, ""
 }
 
@@ -200,7 +222,55 @@ func profileTier(profile RouteProfile, plan PlanKind, backup bool, customOrder [
 	}
 }
 
-func strictGroup(candidates []selectionCandidate) []selectionCandidate {
+func planRank(raw string) (int, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(raw))
+	compact := strings.NewReplacer("-", "", "_", "", " ", "").Replace(normalized)
+	switch {
+	case strings.Contains(compact, "enterprise"),
+		strings.Contains(compact, "health"),
+		strings.Contains(compact, "gov"),
+		strings.Contains(compact, "teacher"),
+		strings.Contains(compact, "edu"):
+		return 600, true
+	case strings.Contains(compact, "promax"):
+		return 500, true
+	case strings.Contains(compact, "prolite"), strings.Contains(compact, "pro"):
+		return 400, true
+	case strings.Contains(compact, "business"),
+		strings.Contains(compact, "team"),
+		strings.Contains(compact, "plus"):
+		return 300, true
+	case compact == "go" || strings.HasSuffix(compact, "go"):
+		return 200, true
+	case strings.Contains(compact, "free"):
+		return 100, true
+	default:
+		return 0, false
+	}
+}
+
+func quotaScore(snapshot QuotaSnapshot) (int, bool) {
+	switch {
+	case snapshot.FiveHourWindowPresent && snapshot.WeeklyWindowPresent:
+		return min(snapshot.FiveHourRemaining, snapshot.WeeklyRemaining), true
+	case snapshot.FiveHourWindowPresent:
+		return snapshot.FiveHourRemaining, true
+	case snapshot.WeeklyWindowPresent:
+		return snapshot.WeeklyRemaining, true
+	default:
+		return 0, false
+	}
+}
+
+func selectionGroup(profile RouteProfile, candidates []selectionCandidate) []selectionCandidate {
+	layer := activeLayer(candidates)
+	if isAutomaticProfile(profile) {
+		return automaticProfileGroup(profile, layer)
+	}
+	return strictProfileGroup(layer)
+}
+
+func activeLayer(candidates []selectionCandidate) []selectionCandidate {
 	hasRegular := false
 	for _, candidate := range candidates {
 		if !candidate.Backup {
@@ -208,19 +278,23 @@ func strictGroup(candidates []selectionCandidate) []selectionCandidate {
 			break
 		}
 	}
-	layer := candidates[:0]
+	layer := make([]selectionCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		if candidate.Backup == !hasRegular {
 			layer = append(layer, candidate)
 		}
 	}
+	return layer
+}
+
+func strictProfileGroup(layer []selectionCandidate) []selectionCandidate {
 	maxTier := layer[0].Tier
 	for _, candidate := range layer[1:] {
 		if candidate.Tier > maxTier {
 			maxTier = candidate.Tier
 		}
 	}
-	tier := layer[:0]
+	tier := make([]selectionCandidate, 0, len(layer))
 	for _, candidate := range layer {
 		if candidate.Tier == maxTier {
 			tier = append(tier, candidate)
@@ -232,7 +306,7 @@ func strictGroup(candidates []selectionCandidate) []selectionCandidate {
 			maxPriority = candidate.Priority
 		}
 	}
-	group := tier[:0]
+	group := make([]selectionCandidate, 0, len(tier))
 	for _, candidate := range tier {
 		if candidate.Priority == maxPriority {
 			group = append(group, candidate)
@@ -240,6 +314,76 @@ func strictGroup(candidates []selectionCandidate) []selectionCandidate {
 	}
 	sort.Slice(group, func(i, j int) bool { return group[i].ID < group[j].ID })
 	return group
+}
+
+func strictGroup(candidates []selectionCandidate) []selectionCandidate {
+	return strictProfileGroup(activeLayer(candidates))
+}
+
+func automaticProfileGroup(profile RouteProfile, layer []selectionCandidate) []selectionCandidate {
+	best := layer[0]
+	for _, candidate := range layer[1:] {
+		if compareAutomaticCandidate(profile, candidate, best) < 0 {
+			best = candidate
+		}
+	}
+	group := make([]selectionCandidate, 0, len(layer))
+	for _, candidate := range layer {
+		if compareAutomaticCandidate(profile, candidate, best) == 0 {
+			group = append(group, candidate)
+		}
+	}
+	sort.Slice(group, func(i, j int) bool { return group[i].ID < group[j].ID })
+	return group
+}
+
+func compareAutomaticCandidate(profile RouteProfile, left, right selectionCandidate) int {
+	switch profile {
+	case ProfileAuto, ProfilePlanHighFirst:
+		if compared := compareKnownMetric(left.PlanKnown, left.PlanRank, right.PlanKnown, right.PlanRank, false); compared != 0 {
+			return compared
+		}
+		return compareKnownMetric(left.QuotaKnown, left.QuotaScore, right.QuotaKnown, right.QuotaScore, false)
+	case ProfilePlanLowFirst:
+		if compared := compareKnownMetric(left.PlanKnown, left.PlanRank, right.PlanKnown, right.PlanRank, true); compared != 0 {
+			return compared
+		}
+		return compareKnownMetric(left.QuotaKnown, left.QuotaScore, right.QuotaKnown, right.QuotaScore, false)
+	case ProfileQuotaHighFirst:
+		if compared := compareKnownMetric(left.QuotaKnown, left.QuotaScore, right.QuotaKnown, right.QuotaScore, false); compared != 0 {
+			return compared
+		}
+		return compareKnownMetric(left.PlanKnown, left.PlanRank, right.PlanKnown, right.PlanRank, false)
+	case ProfileQuotaLowFirst:
+		if compared := compareKnownMetric(left.QuotaKnown, left.QuotaScore, right.QuotaKnown, right.QuotaScore, true); compared != 0 {
+			return compared
+		}
+		return compareKnownMetric(left.PlanKnown, left.PlanRank, right.PlanKnown, right.PlanRank, false)
+	default:
+		return 0
+	}
+}
+
+func compareKnownMetric(leftKnown bool, left int, rightKnown bool, right int, ascending bool) int {
+	if leftKnown != rightKnown {
+		if leftKnown {
+			return -1
+		}
+		return 1
+	}
+	if !leftKnown || left == right {
+		return 0
+	}
+	if ascending {
+		if left < right {
+			return -1
+		}
+		return 1
+	}
+	if left > right {
+		return -1
+	}
+	return 1
 }
 
 func (s *selector) weightedPick(revision uint64, profile RouteProfile, group []selectionCandidate) string {
@@ -279,6 +423,15 @@ func (s *selector) weightedPick(revision uint64, profile RouteProfile, group []s
 	}
 	current[selected.ID] -= total
 	return selected.ID
+}
+
+func (s *selector) equalPick(revision uint64, profile RouteProfile, group []selectionCandidate) string {
+	equalGroup := make([]selectionCandidate, len(group))
+	copy(equalGroup, group)
+	for index := range equalGroup {
+		equalGroup[index].Policy.Weight = 1
+	}
+	return s.weightedPick(revision, profile, equalGroup)
 }
 
 func (s *selector) affinityHit(sessionKey string, revision uint64, group []selectionCandidate, now time.Time, ttl time.Duration) string {
