@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -105,6 +106,23 @@ type QuotaDocument struct {
 	Accounts map[string]QuotaSnapshot `json:"accounts"`
 }
 
+type AccountUsage struct {
+	Requests            int64     `json:"requests"`
+	FailedRequests      int64     `json:"failed_requests"`
+	InputTokens         int64     `json:"input_tokens"`
+	OutputTokens        int64     `json:"output_tokens"`
+	ReasoningTokens     int64     `json:"reasoning_tokens"`
+	CacheReadTokens     int64     `json:"cache_read_tokens"`
+	CacheCreationTokens int64     `json:"cache_creation_tokens"`
+	TotalTokens         int64     `json:"total_tokens"`
+	UpdatedAt           time.Time `json:"updated_at,omitempty"`
+}
+
+type UsageDocument struct {
+	Version  int                     `json:"version"`
+	Accounts map[string]AccountUsage `json:"accounts"`
+}
+
 func defaultConfig() Config {
 	return Config{
 		StateDir:              "codex-account-pool-data",
@@ -135,6 +153,29 @@ func defaultQuotaDocument() QuotaDocument {
 		Version:  stateVersion,
 		Accounts: make(map[string]QuotaSnapshot),
 	}
+}
+
+func defaultUsageDocument() UsageDocument {
+	return UsageDocument{
+		Version:  stateVersion,
+		Accounts: make(map[string]AccountUsage),
+	}
+}
+
+func nonNegativeCounter(value int64) int64 {
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
+func saturatingAdd(current, delta int64) int64 {
+	current = nonNegativeCounter(current)
+	delta = nonNegativeCounter(delta)
+	if current > math.MaxInt64-delta {
+		return math.MaxInt64
+	}
+	return current + delta
 }
 
 func defaultAccountPolicy(priority int) AccountPolicy {
@@ -247,6 +288,39 @@ func normalizeQuotaDocument(doc QuotaDocument) (QuotaDocument, error) {
 		}
 		doc.Accounts[key] = snapshot
 	}
+	return doc, nil
+}
+
+func normalizeUsageDocument(doc UsageDocument) (UsageDocument, error) {
+	if doc.Version == 0 {
+		doc.Version = stateVersion
+	}
+	if doc.Version != stateVersion {
+		return UsageDocument{}, fmt.Errorf("unsupported usage version %d", doc.Version)
+	}
+	if doc.Accounts == nil {
+		doc.Accounts = make(map[string]AccountUsage)
+	}
+	normalized := make(map[string]AccountUsage, len(doc.Accounts))
+	for rawID, account := range doc.Accounts {
+		authID := strings.TrimSpace(rawID)
+		if authID == "" {
+			return UsageDocument{}, fmt.Errorf("usage account id is required")
+		}
+		account.Requests = nonNegativeCounter(account.Requests)
+		account.FailedRequests = nonNegativeCounter(account.FailedRequests)
+		account.InputTokens = nonNegativeCounter(account.InputTokens)
+		account.OutputTokens = nonNegativeCounter(account.OutputTokens)
+		account.ReasoningTokens = nonNegativeCounter(account.ReasoningTokens)
+		account.CacheReadTokens = nonNegativeCounter(account.CacheReadTokens)
+		account.CacheCreationTokens = nonNegativeCounter(account.CacheCreationTokens)
+		account.TotalTokens = nonNegativeCounter(account.TotalTokens)
+		if !account.UpdatedAt.IsZero() {
+			account.UpdatedAt = account.UpdatedAt.UTC()
+		}
+		normalized[authID] = account
+	}
+	doc.Accounts = normalized
 	return doc, nil
 }
 

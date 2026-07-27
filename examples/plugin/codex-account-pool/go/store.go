@@ -11,6 +11,7 @@ import (
 const (
 	policyFileName = "policy.json"
 	quotaFileName  = "quota.json"
+	usageFileName  = "usage.json"
 )
 
 type stateStore struct {
@@ -67,6 +68,26 @@ func (s *stateStore) saveQuota(doc QuotaDocument) error {
 		return err
 	}
 	return s.writeJSON(quotaFileName, normalized)
+}
+
+func (s *stateStore) loadUsage() (UsageDocument, error) {
+	doc := defaultUsageDocument()
+	err := s.readJSON(usageFileName, &doc)
+	if os.IsNotExist(err) {
+		return doc, nil
+	}
+	if err != nil {
+		return UsageDocument{}, err
+	}
+	return normalizeUsageDocument(doc)
+}
+
+func (s *stateStore) saveUsage(doc UsageDocument) error {
+	normalized, err := normalizeUsageDocument(doc)
+	if err != nil {
+		return err
+	}
+	return s.writeJSON(usageFileName, normalized)
 }
 
 func (s *stateStore) readQuotaBytes() ([]byte, error) {

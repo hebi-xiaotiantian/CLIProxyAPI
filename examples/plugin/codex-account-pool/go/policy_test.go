@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -83,6 +85,107 @@ func TestStateStoreRoundTripUsesPrivateFiles(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("policy mode = %o, want 600", info.Mode().Perm())
+	}
+}
+
+func TestNormalizeUsageDocumentClampsCountersAndKeys(t *testing.T) {
+	updatedAt := time.Date(2026, 7, 27, 10, 0, 0, 0, time.FixedZone("offset", 8*60*60))
+	got, err := normalizeUsageDocument(UsageDocument{
+		Accounts: map[string]AccountUsage{
+			" auth-a ": {
+				Requests:            -1,
+				FailedRequests:      -2,
+				InputTokens:         -3,
+				OutputTokens:        -4,
+				ReasoningTokens:     -5,
+				CacheReadTokens:     -6,
+				CacheCreationTokens: -7,
+				TotalTokens:         -8,
+				UpdatedAt:           updatedAt,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeUsageDocument() error = %v", err)
+	}
+	account, ok := got.Accounts["auth-a"]
+	if !ok {
+		t.Fatalf("normalized accounts = %#v", got.Accounts)
+	}
+	if got.Version != stateVersion {
+		t.Fatalf("version = %d, want %d", got.Version, stateVersion)
+	}
+	if account.Requests != 0 || account.FailedRequests != 0 ||
+		account.InputTokens != 0 || account.OutputTokens != 0 ||
+		account.ReasoningTokens != 0 || account.CacheReadTokens != 0 ||
+		account.CacheCreationTokens != 0 || account.TotalTokens != 0 {
+		t.Fatalf("normalized account = %#v", account)
+	}
+	if account.UpdatedAt.Location() != time.UTC {
+		t.Fatalf("updated_at location = %v, want UTC", account.UpdatedAt.Location())
+	}
+}
+
+func TestNormalizeUsageDocumentRejectsUnsupportedVersion(t *testing.T) {
+	_, err := normalizeUsageDocument(UsageDocument{
+		Version:  stateVersion + 1,
+		Accounts: map[string]AccountUsage{},
+	})
+	if err == nil {
+		t.Fatal("normalizeUsageDocument() error = nil, want unsupported version")
+	}
+}
+
+func TestSaturatingAddCapsAtMaxInt64(t *testing.T) {
+	if got := saturatingAdd(math.MaxInt64-2, 10); got != math.MaxInt64 {
+		t.Fatalf("saturatingAdd() = %d, want %d", got, int64(math.MaxInt64))
+	}
+	if got := saturatingAdd(10, -1); got != 10 {
+		t.Fatalf("saturatingAdd() with negative delta = %d, want 10", got)
+	}
+}
+
+func TestStateStoreUsageRoundTripUsesPrivateFile(t *testing.T) {
+	store := newStateStore(t.TempDir())
+	want := defaultUsageDocument()
+	want.Accounts["auth-a"] = AccountUsage{
+		Requests:            3,
+		FailedRequests:      1,
+		InputTokens:         100,
+		OutputTokens:        25,
+		ReasoningTokens:     10,
+		CacheReadTokens:     40,
+		CacheCreationTokens: 5,
+		TotalTokens:         125,
+		UpdatedAt:           time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC),
+	}
+
+	if err := store.saveUsage(want); err != nil {
+		t.Fatalf("saveUsage() error = %v", err)
+	}
+	got, err := store.loadUsage()
+	if err != nil {
+		t.Fatalf("loadUsage() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("loaded usage = %#v, want %#v", got, want)
+	}
+	info, err := os.Stat(filepath.Join(store.dir, usageFileName))
+	if err != nil {
+		t.Fatalf("stat usage file: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("usage mode = %o, want 600", info.Mode().Perm())
+	}
+}
+
+func TestStateStoreMissingUsageStartsEmpty(t *testing.T) {
+	got, err := newStateStore(t.TempDir()).loadUsage()
+	if err != nil {
+		t.Fatalf("loadUsage() error = %v", err)
+	}
+	if got.Version != stateVersion || len(got.Accounts) != 0 {
+		t.Fatalf("missing usage document = %#v", got)
 	}
 }
 
