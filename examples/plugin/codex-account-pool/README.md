@@ -64,19 +64,23 @@ Quota windows are presence-aware. A weekly-only primary window, which can occur 
 ## Token Usage
 
 The account table displays cumulative token usage observed by this CLIProxyAPI
-instance for each Codex `AuthID`. It includes input, output, reasoning,
-cache-read, cache-creation, total token, request, and failed-request counters.
-Reasoning tokens remain a subset of output tokens, and cache tokens remain a
-subset of input tokens, so neither is added again to the displayed total.
+instance for each Codex `AuthID`. It shows input, output, reasoning, total token,
+request, failed-request, and combined cache counters. `usage.json` stores
+cache-read and cache-creation counters separately. Reasoning tokens remain a
+subset of output tokens, and cache tokens remain a subset of input tokens, so
+neither is added again to the total.
 
-Usage is aggregated in memory and saved atomically to `usage.json` at most once
-per second. The final dirty snapshot is flushed during plugin shutdown and
-before switching `state_dir`. These counters are local observations, not the
-account's global OpenAI or ChatGPT subscription usage, and they never affect
-priority, weight, eligibility, reserves, or route selection.
+Usage is aggregated in memory. Routine background writes are coalesced and save
+`usage.json` atomically at most once per second. Plugin shutdown and
+`state_dir` switches may immediately flush an additional dirty snapshot. These
+counters are local observations, not the account's global OpenAI or ChatGPT
+subscription usage, and they never affect priority, weight, eligibility,
+reserves, or route selection.
 
-The browser refreshes account data every five seconds while visible. Polling
-preserves unsaved policy edits and pauses when the page is hidden.
+While the browser is visible and idle, it polls `/accounts` every five seconds.
+During a manual quota refresh, this is replaced by status polling every two
+seconds for up to 59 follow-up polls. Polling pauses while the page is hidden,
+and account updates preserve unsaved policy edits.
 
 The browser resource is exposed at:
 
