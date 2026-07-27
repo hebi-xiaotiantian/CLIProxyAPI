@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -234,6 +235,12 @@ func TestUsage429RecordsFailureBeforeDelayedRefresh(t *testing.T) {
 		AuthID:   "auth-a",
 		Failed:   true,
 		Failure:  pluginapi.UsageFailure{StatusCode: 429},
+		Detail: pluginapi.UsageDetail{
+			InputTokens:     80,
+			OutputTokens:    20,
+			ReasoningTokens: 7,
+			CachedTokens:    30,
+		},
 	})
 	if err != nil {
 		t.Fatalf("marshal usage record: %v", err)
@@ -241,9 +248,146 @@ func TestUsage429RecordsFailureBeforeDelayedRefresh(t *testing.T) {
 	if _, errHandle := plugin.handleUsage(record); errHandle != nil {
 		t.Fatalf("handleUsage() error = %v", errHandle)
 	}
+	usage := plugin.usage.snapshot().Accounts["auth-a"]
+	if usage.Requests != 1 || usage.FailedRequests != 1 ||
+		usage.InputTokens != 80 || usage.OutputTokens != 20 ||
+		usage.ReasoningTokens != 7 || usage.CacheReadTokens != 30 ||
+		usage.TotalTokens != 100 {
+		t.Fatalf("usage after 429 = %#v", usage)
+	}
 	got := plugin.quota.Load().Accounts["auth-a"]
 	if got.FiveHourRemaining != 40 || got.Refresh.State != "failed" {
 		t.Fatalf("quota after 429 = %#v", got)
+	}
+}
+
+func TestReconfigureSameStateDirectoryPreservesUsageTrackerState(t *testing.T) {
+	host := &fakeHostCaller{results: map[string]json.RawMessage{
+		pluginabi.MethodHostAuthList: mustJSON(t, authListResponse{}),
+	}}
+	plugin := newAccountPoolPlugin(host)
+	t.Cleanup(plugin.shutdown)
+	stateDir := t.TempDir()
+	request, errMarshal := json.Marshal(lifecycleRequest{
+		ConfigYAML: []byte("state_dir: " + stateDir + "\nrefresh_interval: 1h\n"),
+	})
+	if errMarshal != nil {
+		t.Fatalf("marshal lifecycle request: %v", errMarshal)
+	}
+	if errConfigure := plugin.configure(request); errConfigure != nil {
+		t.Fatalf("first configure() error = %v", errConfigure)
+	}
+	tracker := plugin.usage
+	plugin.usage.observe(pluginapi.UsageRecord{
+		Provider: "codex",
+		AuthID:   "auth-a",
+		Detail:   pluginapi.UsageDetail{TotalTokens: 11},
+	})
+	oldSelector := plugin.selector
+	plugin.selector.affinity["old-session"] = affinityEntry{
+		AuthID:    "auth-a",
+		Revision:  1,
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	plugin.decisions.add(schedulingDecision{
+		Timestamp: time.Now(),
+		AuthID:    "auth-a",
+		Profile:   ProfilePaidFirst,
+		Layer:     "regular",
+	})
+
+	if errConfigure := plugin.configure(request); errConfigure != nil {
+		t.Fatalf("second configure() error = %v", errConfigure)
+	}
+
+	usage := plugin.usage.snapshot().Accounts["auth-a"]
+	if plugin.usage != tracker || usage.Requests != 1 || usage.TotalTokens != 11 {
+		t.Fatalf("usage after same-directory configure = tracker:%p usage:%#v", plugin.usage, usage)
+	}
+	if plugin.selector == oldSelector || len(plugin.selector.affinity) != 0 {
+		t.Fatalf("selector runtime state survived configure: %#v", plugin.selector.affinity)
+	}
+	if got := plugin.decisions.snapshot(); len(got) != 0 {
+		t.Fatalf("decisions after configure = %#v, want empty", got)
+	}
+}
+
+func TestReconfigureAbortsBeforeStoppingCoordinatorWhenUsageFlushFails(t *testing.T) {
+	host := &fakeHostCaller{results: map[string]json.RawMessage{
+		pluginabi.MethodHostAuthList: mustJSON(t, authListResponse{}),
+	}}
+	plugin := newAccountPoolPlugin(host)
+	oldDir := t.TempDir()
+	oldRequest, errMarshal := json.Marshal(lifecycleRequest{
+		ConfigYAML: []byte("state_dir: " + oldDir + "\nrefresh_interval: 1h\n"),
+	})
+	if errMarshal != nil {
+		t.Fatalf("marshal old lifecycle request: %v", errMarshal)
+	}
+	if errConfigure := plugin.configure(oldRequest); errConfigure != nil {
+		t.Fatalf("first configure() error = %v", errConfigure)
+	}
+	oldCoordinator := plugin.coordinator
+	oldSelector := plugin.selector
+	plugin.decisions.add(schedulingDecision{
+		Timestamp: time.Now(),
+		AuthID:    "auth-a",
+		Profile:   ProfilePaidFirst,
+		Layer:     "regular",
+	})
+
+	plugin.usage.persistenceMu.Lock()
+	originalSave := plugin.usage.save
+	plugin.usage.save = func(*stateStore, UsageDocument) error {
+		return fmt.Errorf("forced usage save failure")
+	}
+	plugin.usage.persistenceMu.Unlock()
+	t.Cleanup(func() {
+		plugin.usage.persistenceMu.Lock()
+		plugin.usage.save = originalSave
+		plugin.usage.persistenceMu.Unlock()
+		plugin.shutdown()
+	})
+	plugin.usage.observe(pluginapi.UsageRecord{
+		Provider: "codex",
+		AuthID:   "auth-a",
+		Detail:   pluginapi.UsageDetail{TotalTokens: 13},
+	})
+
+	newDir := t.TempDir()
+	newRequest, errMarshal := json.Marshal(lifecycleRequest{
+		ConfigYAML: []byte("state_dir: " + newDir + "\nrefresh_interval: 1h\n"),
+	})
+	if errMarshal != nil {
+		t.Fatalf("marshal new lifecycle request: %v", errMarshal)
+	}
+	errConfigure := plugin.configure(newRequest)
+	if errConfigure == nil || !strings.Contains(errConfigure.Error(), "configure usage state") {
+		t.Fatalf("configure() error = %v, want usage state failure", errConfigure)
+	}
+
+	if plugin.config.StateDir != oldDir || plugin.store == nil || plugin.store.dir != oldDir ||
+		plugin.usage.store == nil || plugin.usage.store.dir != oldDir {
+		t.Fatalf(
+			"state switched after failed usage flush: config=%q store=%#v usage_store=%#v",
+			plugin.config.StateDir,
+			plugin.store,
+			plugin.usage.store,
+		)
+	}
+	if plugin.coordinator != oldCoordinator {
+		t.Fatal("coordinator changed after failed usage flush")
+	}
+	if plugin.selector != oldSelector {
+		t.Fatal("selector changed after failed usage flush")
+	}
+	decisions := plugin.decisions.snapshot()
+	if len(decisions) != 1 || decisions[0].AuthID != "auth-a" {
+		t.Fatalf("decision history after failed usage flush = %#v", decisions)
+	}
+	usage := plugin.usage.snapshot().Accounts["auth-a"]
+	if usage.Requests != 1 || usage.TotalTokens != 13 {
+		t.Fatalf("usage after failed state switch = %#v", usage)
 	}
 }
 

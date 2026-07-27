@@ -650,5 +650,9 @@ func newTestPlugin(t *testing.T) *accountPoolPlugin {
 	cfg.StalePolicy = StaleAllow
 	plugin.config = cfg
 	plugin.store = newStateStore(cfg.StateDir)
+	if errConfigure := plugin.usage.configureStore(plugin.store); errConfigure != nil {
+		t.Fatalf("configure usage store: %v", errConfigure)
+	}
+	t.Cleanup(plugin.shutdown)
 	return plugin
 }

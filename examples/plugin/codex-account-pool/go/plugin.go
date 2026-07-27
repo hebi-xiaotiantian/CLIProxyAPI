@@ -12,6 +12,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+	"github.com/sirupsen/logrus"
 )
 
 type lifecycleRequest struct {
@@ -39,6 +40,7 @@ type accountPoolPlugin struct {
 	delayedMu      sync.Mutex
 	delayedRefresh map[string]*time.Timer
 	coordinator    *refreshCoordinator
+	usage          *usageTracker
 }
 
 func newAccountPoolPlugin(host hostCaller) *accountPoolPlugin {
@@ -48,6 +50,7 @@ func newAccountPoolPlugin(host hostCaller) *accountPoolPlugin {
 		decisions:      newDecisionRing(maxRecentDecisions),
 		config:         defaultConfig(),
 		delayedRefresh: make(map[string]*time.Timer),
+		usage:          newUsageTracker(time.Now, usageFlushInterval),
 	}
 	policy := defaultPolicyDocument()
 	quota := defaultQuotaDocument()
@@ -70,6 +73,10 @@ func (p *accountPoolPlugin) configure(raw []byte) error {
 
 	p.lifecycleMu.Lock()
 	defer p.lifecycleMu.Unlock()
+	store := newStateStore(cfg.StateDir)
+	if errUsage := p.usage.configureStore(store); errUsage != nil {
+		return fmt.Errorf("configure usage state: %w", errUsage)
+	}
 	p.stopDelayedRefreshes()
 	p.configMu.Lock()
 	oldCoordinator := p.coordinator
@@ -81,7 +88,6 @@ func (p *accountPoolPlugin) configure(raw []byte) error {
 
 	p.policyMu.Lock()
 	p.quotaMu.Lock()
-	store := newStateStore(cfg.StateDir)
 	policyExists := store.policyExists()
 	policy, errPolicy := store.loadPolicy()
 	if errPolicy != nil {
@@ -144,6 +150,9 @@ func (p *accountPoolPlugin) shutdown() {
 	if coordinator != nil {
 		coordinator.stop()
 	}
+	if errUsage := p.usage.shutdown(); errUsage != nil {
+		logrus.WithField("error", sanitizeText(errUsage.Error())).Warn("failed to flush Codex account usage during shutdown")
+	}
 }
 
 func (p *accountPoolPlugin) pick(raw []byte) ([]byte, error) {
@@ -190,6 +199,7 @@ func (p *accountPoolPlugin) handleUsage(raw []byte) ([]byte, error) {
 	if errUnmarshal := json.Unmarshal(raw, &record); errUnmarshal != nil {
 		return nil, fmt.Errorf("decode usage record: %w", errUnmarshal)
 	}
+	p.usage.observe(record)
 	if strings.EqualFold(record.Provider, "codex") && record.Failed && record.Failure.StatusCode == 429 {
 		p.applyRefreshResult(QuotaSnapshot{AuthID: record.AuthID}, fmt.Errorf("codex request returned HTTP 429"))
 		p.queueRefreshByID(record.AuthID, 30*time.Second)
