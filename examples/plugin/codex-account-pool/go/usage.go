@@ -244,9 +244,16 @@ func (t *usageTracker) flush() error {
 	defer t.persistenceMu.Unlock()
 
 	t.mu.Lock()
-	if !t.dirty || t.store == nil {
+	if !t.dirty {
 		t.mu.Unlock()
 		return nil
+	}
+	if t.store == nil {
+		message := sanitizeError(fmt.Errorf("usage state store is unavailable"))
+		t.degraded = true
+		t.lastError = message
+		t.mu.Unlock()
+		return fmt.Errorf("%s", message)
 	}
 	store := t.store
 	doc := cloneUsageDocument(t.doc)

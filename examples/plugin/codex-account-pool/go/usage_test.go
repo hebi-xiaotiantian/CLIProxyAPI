@@ -21,6 +21,9 @@ func TestUsageTrackerObservesCodexRecords(t *testing.T) {
 			t.Fatalf("shutdown usage tracker: %v", err)
 		}
 	})
+	if err := tracker.configureStore(newStateStore(t.TempDir())); err != nil {
+		t.Fatalf("configure store: %v", err)
+	}
 
 	tracker.observe(pluginapi.UsageRecord{
 		Provider: "openai",
@@ -106,6 +109,27 @@ func TestUsageTrackerObservesCodexRecords(t *testing.T) {
 	got.Accounts["auth-a"] = AccountUsage{}
 	if tracker.snapshot().Accounts["auth-a"].Requests != 2 {
 		t.Fatal("snapshot returned a shared accounts map")
+	}
+}
+
+func TestUsageTrackerReportsMissingStore(t *testing.T) {
+	tracker := newUsageTracker(time.Now, time.Hour)
+	tracker.observe(usageRecord("auth-a", 3, 5))
+
+	err := tracker.shutdown()
+	if err == nil {
+		t.Fatal("shutdown succeeded with dirty usage and no state store")
+	}
+	degraded, message := tracker.health()
+	if !degraded || message == "" {
+		t.Fatalf("health = (%v, %q), want degraded with message", degraded, message)
+	}
+	if !tracker.isDirty() {
+		t.Fatal("missing store cleared dirty usage")
+	}
+	got := tracker.snapshot().Accounts["auth-a"]
+	if got.Requests != 1 || got.InputTokens != 3 || got.OutputTokens != 5 || got.TotalTokens != 8 {
+		t.Fatalf("in-memory usage was not retained: %#v", got)
 	}
 }
 
