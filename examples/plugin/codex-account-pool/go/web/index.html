@@ -872,19 +872,34 @@
       }
     }
 
-    async function refreshAccounts(generation = null) {
-      if (document.hidden || !managementKey) return false;
+    async function refreshAccountsResult(generation = null) {
+      if (document.hidden || !managementKey) return { applied: false, reason: "inactive" };
       const accountRequest = startAccountRequest(generation);
       const accountResult = await accountRequest.response;
-      if (document.hidden || !accountRequestIsCurrent(accountRequest)) return false;
+      if (document.hidden) return { applied: false, reason: "hidden" };
+      if (!accountRequestIsCurrent(accountRequest)) {
+        const superseded = accountRequest.sequence !== accountRequestSequence &&
+          accountRequest.generation !== null &&
+          accountRequest.generation === refreshPollGeneration &&
+          accountRequest.generation === activeRefreshPollGeneration;
+        if (superseded) return { applied: false, reason: "superseded" };
+        return { applied: false, reason: "stale" };
+      }
       if (accountResult.error) {
         setConnectionStatus(accountResult.error.message, "error");
-        return false;
+        return { applied: false, reason: "failed" };
       }
-      if (!applyAccountsResponse(accountRequest, accountResult.accountData)) return false;
+      if (!applyAccountsResponse(accountRequest, accountResult.accountData)) {
+        return { applied: false, reason: "stale" };
+      }
       setConnectionStatus("已连接", "success");
       renderAccounts();
-      return true;
+      return { applied: true, reason: "applied" };
+    }
+
+    async function refreshAccounts(generation = null) {
+      const result = await refreshAccountsResult(generation);
+      return result.applied;
     }
 
     function finishRefreshPolling(generation) {
@@ -954,8 +969,14 @@
         finishRefreshPolling(generation);
         return;
       }
-      const loaded = await refreshAccounts(generation);
-      if (!loaded) {
+      const accountResult = await refreshAccountsResult(generation);
+      if (!accountResult.applied) {
+        if (accountResult.reason === "superseded" &&
+          activeRefreshPollGeneration === generation &&
+          attempt < 59) {
+          setTimeout(() => pollRefreshStatus(generation, attempt + 1).catch(showError), 2000);
+          return;
+        }
         finishRefreshPolling(generation);
         return;
       }
@@ -1113,9 +1134,13 @@
     document.addEventListener("visibilitychange", () => {
       clearTimeout(accountPollTimer);
       accountPollTimer = 0;
-      if (!document.hidden && managementKey && activeRefreshPollGeneration === 0) {
-        refreshAccounts().finally(scheduleAccountPolling);
+      if (document.hidden || !managementKey) return;
+      const generation = activeRefreshPollGeneration;
+      if (generation !== 0) {
+        refreshAccounts(generation).catch(showError);
+        return;
       }
+      refreshAccounts().finally(scheduleAccountPolling);
     });
 
     if (managementKey) {

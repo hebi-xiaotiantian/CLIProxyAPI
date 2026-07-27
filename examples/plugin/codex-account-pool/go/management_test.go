@@ -808,7 +808,11 @@ func TestStaticResourceIncludesUsageDisplayAndPollingControls(t *testing.T) {
 		"activeRefreshPollGeneration = generation",
 		"activeRefreshPollGeneration !== generation",
 		"document.hidden || !managementKey || activeRefreshPollGeneration !== 0",
-		"!document.hidden && managementKey && activeRefreshPollGeneration === 0",
+		"refreshAccountsResult",
+		`reason: "superseded"`,
+		`accountResult.reason === "superseded"`,
+		"const generation = activeRefreshPollGeneration",
+		"refreshAccounts(generation)",
 		"5000",
 	} {
 		if !strings.Contains(text, required) {
@@ -823,6 +827,9 @@ func TestStaticResourceIncludesUsageDisplayAndPollingControls(t *testing.T) {
 	}
 	if count := strings.Count(text, "finishRefreshPolling(generation)"); count < 4 {
 		t.Fatalf("finishRefreshPolling(generation) count = %d, want all polling exit paths guarded", count)
+	}
+	if strings.Contains(text, "!document.hidden && managementKey && activeRefreshPollGeneration === 0") {
+		t.Fatal("visibility refresh must not require activeRefreshPollGeneration === 0")
 	}
 	if count := strings.Count(text, "pending.clear()"); count != 1 {
 		t.Fatalf("pending.clear() count = %d, want 1 only after a successful apply", count)
