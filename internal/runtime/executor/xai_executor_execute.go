@@ -106,6 +106,9 @@ func (e *XAIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req 
 			cacheXAIReasoningReplayFromCompleted(ctx, prepared.replayScope, completedData)
 			var param any
 			out := sdktranslator.TranslateNonStream(ctx, prepared.to, prepared.responseFormat, req.Model, prepared.originalPayload, prepared.body, completedData, &param)
+			if prepared.responseFormat == sdktranslator.FormatOpenAIResponse {
+				out = helps.EnsureResponsesUsageDetails(out)
+			}
 			return cliproxyexecutor.Response{Payload: out, Headers: httpResp.Header.Clone()}, nil
 		}
 	}
@@ -121,6 +124,9 @@ func (e *XAIExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.Aut
 
 	var param any
 	out := sdktranslator.TranslateNonStream(ctx, prepared.to, prepared.responseFormat, req.Model, prepared.originalPayload, prepared.body, data, &param)
+	if prepared.responseFormat == sdktranslator.FormatOpenAIResponse {
+		out = helps.EnsureResponsesUsageDetails(out)
+	}
 	return cliproxyexecutor.Response{Payload: out, Headers: headers}, nil
 }
 
@@ -272,6 +278,20 @@ func xaiBuildCompactionTriggerStreamChunks(prepared *xaiPreparedRequest, compact
 	createdResponse := xaiBuildCompactionBaseResponse(prepared, compactData, responseID, createdAt, "in_progress")
 	inProgressResponse := xaiBuildCompactionBaseResponse(prepared, compactData, responseID, createdAt, "in_progress")
 	completedResponse := xaiBuildCompactionBaseResponse(prepared, compactData, responseID, createdAt, "completed")
+	requestModelName := ""
+	if prepared != nil {
+		requestModelName = gjson.GetBytes(prepared.originalPayload, "model").String()
+		if requestModelName == "" {
+			requestModelName = prepared.baseModel
+		}
+	}
+	if requestModelName == "" {
+		requestModelName = gjson.GetBytes(compactData, "model").String()
+	}
+	if requestModelName != "" {
+		createdResponse, _ = sjson.SetBytes(createdResponse, "model", requestModelName)
+		inProgressResponse, _ = sjson.SetBytes(inProgressResponse, "model", requestModelName)
+	}
 	completedResponse, _ = sjson.SetBytes(completedResponse, "completed_at", completedAt)
 	completedResponse, _ = sjson.SetRawBytes(completedResponse, "output", output)
 	if usage := gjson.GetBytes(compactData, "usage"); usage.Exists() {
@@ -289,6 +309,7 @@ func xaiBuildCompactionTriggerStreamChunks(prepared *xaiPreparedRequest, compact
 	donePayload, _ = sjson.SetRawBytes(donePayload, "item", item)
 	completedPayload := []byte(`{"type":"response.completed","sequence_number":5}`)
 	completedPayload, _ = sjson.SetRawBytes(completedPayload, "response", completedResponse)
+	completedPayload = helps.EnsureResponsesUsageDetails(completedPayload)
 
 	return [][]byte{
 		xaiBuildSSEFrame("response.created", createdPayload),
