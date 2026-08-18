@@ -184,3 +184,53 @@ func TestResolveCodexFingerprintConfigSession(t *testing.T) {
 		t.Fatal("session mode must not pre-converge the thread")
 	}
 }
+
+func TestResolveCodexFingerprintConfigWithMode(t *testing.T) {
+	// Empty/off modes stay disabled.
+	if cfg := ResolveCodexFingerprintConfigWithMode(nil, "auth-1", ""); cfg.Mode != "" {
+		t.Fatalf("empty mode = %q, want empty", cfg.Mode)
+	}
+	if cfg := ResolveCodexFingerprintConfigWithMode(nil, "auth-1", CodexFingerprintOff); cfg.Mode != CodexFingerprintOff {
+		t.Fatalf("off mode = %q, want off", cfg.Mode)
+	}
+	if cfg := ResolveCodexFingerprintConfigWithMode(nil, "auth-1", CodexFingerprintOff); cfg.InstallationID != "" {
+		t.Fatalf("off mode must not resolve identifiers: %+v", cfg)
+	}
+
+	// Forced device mode works without any metadata.
+	device := ResolveCodexFingerprintConfigWithMode(nil, "auth-1", CodexFingerprintDevice)
+	if device.Mode != CodexFingerprintDevice || device.InstallationID == "" {
+		t.Fatalf("forced device mode = %+v, want resolved installation", device)
+	}
+	if device.SessionID != "" || device.ThreadID != "" {
+		t.Fatalf("device mode must not resolve session/thread: %+v", device)
+	}
+	// Same auth id stays stable; different auth ids differ.
+	again := ResolveCodexFingerprintConfigWithMode(nil, "auth-1", CodexFingerprintDevice)
+	if again.InstallationID != device.InstallationID {
+		t.Fatalf("forced device installation not stable: %q != %q", again.InstallationID, device.InstallationID)
+	}
+	other := ResolveCodexFingerprintConfigWithMode(nil, "auth-2", CodexFingerprintDevice)
+	if other.InstallationID == device.InstallationID {
+		t.Fatal("different auth ids must resolve different installations")
+	}
+
+	// Forced session mode resolves session, thread resolved per client session later.
+	session := ResolveCodexFingerprintConfigWithMode(nil, "auth-1", CodexFingerprintSession)
+	if session.Mode != CodexFingerprintSession || session.SessionID == "" {
+		t.Fatalf("forced session mode = %+v, want resolved session", session)
+	}
+
+	// Forced full mode converges thread to session.
+	full := ResolveCodexFingerprintConfigWithMode(nil, "auth-1", CodexFingerprintFull)
+	if full.ThreadID != full.SessionID {
+		t.Fatalf("forced full mode thread = %q, want session %q", full.ThreadID, full.SessionID)
+	}
+
+	// Explicit metadata seed still wins under a forced mode.
+	seed := uuid.NewString()
+	withSeed := ResolveCodexFingerprintConfigWithMode(map[string]any{"codex_fingerprint_seed": seed}, "auth-1", CodexFingerprintDevice)
+	if withSeed.Seed != seed {
+		t.Fatalf("seed = %q, want explicit %q", withSeed.Seed, seed)
+	}
+}

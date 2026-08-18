@@ -146,6 +146,11 @@ type AntigravityConfig struct {
 // CodexConfig configures provider-wide Codex request behavior.
 type CodexConfig struct {
 	IdentityConfuse bool `yaml:"identity-confuse" json:"identity-confuse"`
+	// FingerprintMode selects the default Codex device/session fingerprint
+	// convergence for OAuth accounts that do not set codex_fingerprint_mode in
+	// their auth file metadata. Valid values: off, device, session, full.
+	// Empty keeps the legacy identity-confuse behavior.
+	FingerprintMode string `yaml:"fingerprint-mode" json:"fingerprint-mode"`
 	// DisableCodexCloaking disables forcing the official Codex identity headers on HTTP/SSE and WebSocket requests.
 	DisableCodexCloaking bool `yaml:"disable-codex-cloaking" json:"disable-codex-cloaking"`
 	// OptimizeMultiAgentV2 optimizes official Codex multi-agent requests.

@@ -145,9 +145,17 @@ CLIProxyAPI Guides: [https://help.router-for.me/](https://help.router-for.me/)
 When several users share one Codex OAuth account, every client carries its own
 installation/session/thread identifiers and the upstream provider counts devices
 and sessions from them. Per-account convergence rewrites those identifiers to
-account-level constants so the upstream sees one stable device profile. Set these
-keys on the auth file (`auths/*.json`), and they apply to HTTP/SSE and WebSocket
-requests with upstream identifiers restored in responses:
+account-level constants so the upstream sees one stable device profile.
+
+The simplest way to enable it is the global config switch:
+
+```yaml
+codex:
+  fingerprint-mode: session # off | device | session | full
+```
+
+Per-account overrides go on the auth file (`auths/*.json`), and they apply to
+HTTP/SSE and WebSocket requests with upstream identifiers restored in responses:
 
 ```json
 {
@@ -157,11 +165,10 @@ requests with upstream identifiers restored in responses:
 }
 ```
 
-- `codex_fingerprint_mode`: `device` (one installation per account, sessions stay
-  per client), `session` (one installation + one session; each client session
-  still derives its own stable thread), `full` (installation + session + thread
-  all account constants, most aggressive), or `off` (disable all confusion for
-  this account). Unset keeps the legacy global `codex.identity-confuse` behavior.
+- Mode semantics: `device` (one installation per account, sessions stay per
+  client), `session` (one installation + one session; each client session still
+  derives its own stable thread), `full` (installation + session + thread all
+  account constants, most aggressive), or `off` (disable all confusion).
 - `codex_fingerprint_seed`: optional account UUID the converged identifiers
   derive from; omit to derive a stable seed from the auth ID.
 - `codex_fingerprint_installation_id`: optional explicit device UUID that takes

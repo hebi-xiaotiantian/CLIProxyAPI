@@ -226,6 +226,19 @@ codex:
   # Some superstitious users believe request tracking identifiers can be used
   # as evidence for TOS enforcement bans; this option only satisfies those odd concerns.
   identity-confuse: false
+  # Global Codex device/session fingerprint convergence switch for all Codex
+  # OAuth accounts. Valid values: off | device | session | full.
+  #   device:  converge the installation identifier to one account-level constant;
+  #            upstream sees one device with multiple sessions.
+  #   session: also converge the session identifier; each real client session
+  #            still derives its own stable thread (one device, one session,
+  #            multiple threads - like a normal user spawning agents).
+  #   full:    converge installation, session and thread to account constants
+  #            (one device, one session, one thread; most aggressive).
+  #   off:     disable convergence for all accounts.
+  # Accounts can override this with codex_fingerprint_mode on their auth file
+  # (auths/*.json). Empty keeps the legacy identity-confuse behavior.
+  fingerprint-mode: ""
   # Per-account Codex device/session fingerprint convergence (like identity-confuse,
   # but account-level and stricter). Set these keys on a Codex OAuth auth file
   # (auths/*.json), not here:
@@ -243,8 +256,8 @@ codex:
   #             derived from; omit to derive a stable seed from the auth ID.
   #   codex_fingerprint_installation_id: optional explicit device UUID that takes
   #             precedence over the derived installation identifier.
-  # Convergence is explicit opt-in per account and applies to HTTP/SSE and
-  # WebSocket requests; upstream identifiers are restored in responses.
+  # Convergence applies to HTTP/SSE and WebSocket requests; upstream identifiers
+  # are restored in responses.
   # Disable forcing the official Codex User-Agent and Originator headers on HTTP/SSE and WebSocket requests.
   disable-codex-cloaking: false
   # When true, optimize Codex Desktop, codex-tui, and codex_cli_rs requests for multi-agent v2.

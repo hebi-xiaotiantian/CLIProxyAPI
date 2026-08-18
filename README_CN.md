@@ -141,8 +141,16 @@ CLIProxyAPI 用户手册： [https://help.router-for.me/](https://help.router-fo
 多个用户共享同一个 Codex OAuth 账号时，每个客户端会携带各自的
 installation / session / thread 标识，上游据此统计设备数与会话数。
 按账号收敛会把这类标识改写成账号级恒定值，让上游看到稳定的单设备画像。
-在 auth 文件（`auths/*.json`）中设置以下字段即可，HTTP/SSE 与 WebSocket
-请求都会生效，响应中的上游标识会自动还原为客户端原值：
+
+最简单的开启方式是**全局配置开关**（config.yaml）：
+
+```yaml
+codex:
+  fingerprint-mode: session # off | device | session | full
+```
+
+也可以按账号在 auth 文件（`auths/*.json`）中设置字段覆盖全局开关，
+HTTP/SSE 与 WebSocket 请求都会生效，响应中的上游标识会自动还原为客户端原值：
 
 ```json
 {
@@ -152,14 +160,14 @@ installation / session / thread 标识，上游据此统计设备数与会话数
 }
 ```
 
-- `codex_fingerprint_mode`：
+- 模式含义：
   - `device`：收敛 installation 为账号级恒定值（上游看到 1 台设备 + 多会话）；
   - `session`：再收敛 session（1 台设备 + 1 会话 + N 线程，每个真实客户端
     会话仍派生独立的稳定 thread，模拟正常用户开子代理的模式）；
   - `full`：installation + session + thread 全部收敛为账号级恒定值
     （1 台设备 + 1 会话 + 1 线程，最激进）；
-  - `off`：显式关闭该账号的全部身份混淆。
-  - 不设置时保持全局 `codex.identity-confuse` 的旧行为。
+  - `off`：关闭全部身份混淆。
+  - 全局开关与账号字段都不设置时，保持 `codex.identity-confuse` 的旧行为。
 - `codex_fingerprint_seed`：可选的账号 UUID，收敛标识由其派生；不填则从
   auth ID 稳定派生。
 - `codex_fingerprint_installation_id`：可选的显式设备 UUID，优先于派生的

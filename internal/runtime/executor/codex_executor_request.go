@@ -168,7 +168,15 @@ func applyCodexIdentityConfuseBody(cfg *config.Config, auth *cliproxyauth.Auth, 
 	// Per-account convergence is explicit opt-in: codex_fingerprint_mode set on
 	// the auth file. It works independently of the global identity-confuse
 	// toggle, and an explicit "off" opts this account out of all confusion.
-	if fpCfg := helps.ResolveCodexFingerprintConfig(metadata, authID); fpCfg.Mode != "" {
+	// The global codex.fingerprint-mode switch acts as the default for accounts
+	// without an explicit mode.
+	fpCfg := helps.ResolveCodexFingerprintConfig(metadata, authID)
+	if fpCfg.Mode == "" && cfg != nil {
+		if globalMode := helps.ParseCodexFingerprintMode(cfg.Codex.FingerprintMode); globalMode != "" {
+			fpCfg = helps.ResolveCodexFingerprintConfigWithMode(metadata, authID, globalMode)
+		}
+	}
+	if fpCfg.Mode != "" {
 		if fpCfg.Mode == helps.CodexFingerprintOff {
 			return rawJSON, codexIdentityConfuseState{}
 		}

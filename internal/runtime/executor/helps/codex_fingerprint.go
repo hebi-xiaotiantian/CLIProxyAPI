@@ -117,7 +117,18 @@ func CodexFingerprintThreadID(seed string, clientSessionID string) string {
 // Convergence is strictly opt-in: accounts without codex_fingerprint_mode get
 // an empty mode, and callers must keep their legacy behavior in that case.
 func ResolveCodexFingerprintConfig(metadata map[string]any, authID string) CodexFingerprintConfig {
-	mode := ParseCodexFingerprintMode(metadataStringValue(metadata, CodexFingerprintModeMetadataKey))
+	return resolveCodexFingerprintConfigWithMode(metadata, authID, ParseCodexFingerprintMode(metadataStringValue(metadata, CodexFingerprintModeMetadataKey)))
+}
+
+// ResolveCodexFingerprintConfigWithMode is like ResolveCodexFingerprintConfig
+// but forces the convergence mode instead of reading it from metadata. It backs
+// the global codex.fingerprint-mode config switch, which acts as the default
+// for accounts without an explicit codex_fingerprint_mode.
+func ResolveCodexFingerprintConfigWithMode(metadata map[string]any, authID string, mode CodexFingerprintMode) CodexFingerprintConfig {
+	return resolveCodexFingerprintConfigWithMode(metadata, authID, mode)
+}
+
+func resolveCodexFingerprintConfigWithMode(metadata map[string]any, authID string, mode CodexFingerprintMode) CodexFingerprintConfig {
 	if mode == "" || mode == CodexFingerprintOff {
 		return CodexFingerprintConfig{Mode: mode}
 	}

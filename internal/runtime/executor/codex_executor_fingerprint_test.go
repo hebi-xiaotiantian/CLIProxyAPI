@@ -301,3 +301,66 @@ func TestCodexFingerprintHeadersNoopWithoutState(t *testing.T) {
 		t.Fatalf("Session-Id = %q, want %q", got, state.sessionID)
 	}
 }
+
+func TestCodexFingerprintGlobalSwitchAppliesWhenMetadataUnset(t *testing.T) {
+	cfg := &config.Config{
+		Routing: config.RoutingConfig{Strategy: "fill-first"},
+		Codex:   config.CodexConfig{FingerprintMode: "device"},
+	}
+	auth := &cliproxyauth.Auth{ID: "auth-1", Provider: "codex"}
+	clientBody := []byte(`{"model":"gpt-5-codex","client_metadata":{"x-codex-installation-id":"client-device-A"}}`)
+
+	body, state := applyCodexIdentityConfuseBody(cfg, auth, clientBody, clientBody)
+
+	if !state.enabled {
+		t.Fatal("global device switch must enable convergence without account metadata")
+	}
+	if state.mode != helps.CodexFingerprintDevice {
+		t.Fatalf("state mode = %q, want device", state.mode)
+	}
+	if got := gjson.GetBytes(body, "client_metadata.x-codex-installation-id").String(); got != state.installationID {
+		t.Fatalf("installation id = %q, want converged %q", got, state.installationID)
+	}
+}
+
+func TestCodexFingerprintGlobalSwitchAccountMetadataWins(t *testing.T) {
+	cfg := &config.Config{
+		Routing: config.RoutingConfig{Strategy: "fill-first"},
+		Codex:   config.CodexConfig{FingerprintMode: "full"},
+	}
+	auth := codexFingerprintAuth("auth-1", "session", nil)
+	clientBody := []byte(`{"model":"gpt-5-codex","prompt_cache_key":"sess-A","client_metadata":{"session_id":"sess-A"}}`)
+
+	body, state := applyCodexIdentityConfuseBody(cfg, auth, clientBody, clientBody)
+
+	if state.mode != helps.CodexFingerprintSession {
+		t.Fatalf("account metadata must override the global switch, mode = %q", state.mode)
+	}
+	if state.threadID == state.sessionID {
+		t.Fatal("session mode must keep per-client threads even under a global full switch")
+	}
+	if got := gjson.GetBytes(body, "client_metadata.thread_id").String(); got != state.threadID {
+		t.Fatalf("client_metadata.thread_id = %q, want %q", got, state.threadID)
+	}
+}
+
+func TestCodexFingerprintGlobalOffDisablesEverything(t *testing.T) {
+	cfg := &config.Config{
+		Routing: config.RoutingConfig{Strategy: "fill-first"},
+		Codex:   config.CodexConfig{FingerprintMode: "off", IdentityConfuse: true},
+	}
+	auth := &cliproxyauth.Auth{ID: "auth-1", Provider: "codex"}
+	clientBody := []byte(`{"model":"gpt-5-codex","prompt_cache_key":"cache-1","client_metadata":{"x-codex-installation-id":"client-device-A"}}`)
+
+	body, state := applyCodexIdentityConfuseBody(cfg, auth, clientBody, clientBody)
+
+	if state.enabled {
+		t.Fatal("global off switch must disable all confusion")
+	}
+	if got := gjson.GetBytes(body, "client_metadata.x-codex-installation-id").String(); got != "client-device-A" {
+		t.Fatalf("installation id must stay untouched, got %q", got)
+	}
+	if got := gjson.GetBytes(body, "prompt_cache_key").String(); got != "cache-1" {
+		t.Fatalf("prompt_cache_key must stay untouched, got %q", got)
+	}
+}
