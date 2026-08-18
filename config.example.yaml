@@ -226,6 +226,25 @@ codex:
   # Some superstitious users believe request tracking identifiers can be used
   # as evidence for TOS enforcement bans; this option only satisfies those odd concerns.
   identity-confuse: false
+  # Per-account Codex device/session fingerprint convergence (like identity-confuse,
+  # but account-level and stricter). Set these keys on a Codex OAuth auth file
+  # (auths/*.json), not here:
+  #   codex_fingerprint_mode: off | device | session | full
+  #     device: converge the installation identifier to one account-level constant;
+  #             the upstream sees one device with multiple sessions (default when
+  #             identity-confuse is enabled is the looser per-client-value remap).
+  #     session: additionally converge the session identifier; each real client
+  #             session still derives its own stable thread (one device, one
+  #             session, multiple threads - like a normal user spawning agents).
+  #     full:    converge installation, session and thread to account constants
+  #             (one device, one session, one thread; most aggressive).
+  #     off:     explicitly disable all confusion for this account.
+  #   codex_fingerprint_seed: optional account UUID the converged identifiers are
+  #             derived from; omit to derive a stable seed from the auth ID.
+  #   codex_fingerprint_installation_id: optional explicit device UUID that takes
+  #             precedence over the derived installation identifier.
+  # Convergence is explicit opt-in per account and applies to HTTP/SSE and
+  # WebSocket requests; upstream identifiers are restored in responses.
   # Disable forcing the official Codex User-Agent and Originator headers on HTTP/SSE and WebSocket requests.
   disable-codex-cloaking: false
   # When true, optimize Codex Desktop, codex-tui, and codex_cli_rs requests for multi-agent v2.

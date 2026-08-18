@@ -85,6 +85,10 @@ func (e *CodexExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth
 type codexIdentityConfuseState struct {
 	enabled                bool
 	authID                 string
+	mode                   helps.CodexFingerprintMode
+	installationID         string
+	sessionID              string
+	threadID               string
 	originalPromptCacheKey string
 	promptCacheKey         string
 	turnIDs                []codexIdentityReplacement
@@ -155,11 +159,28 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
 }
 
 func applyCodexIdentityConfuseBody(cfg *config.Config, auth *cliproxyauth.Auth, userPayload []byte, rawJSON []byte) ([]byte, codexIdentityConfuseState) {
-	if !codexIdentityConfuseEnabled(cfg) || auth == nil || strings.TrimSpace(auth.ID) == "" || len(rawJSON) == 0 {
+	var metadata map[string]any
+	var authID string
+	if auth != nil {
+		metadata = auth.Metadata
+		authID = strings.TrimSpace(auth.ID)
+	}
+	// Per-account convergence is explicit opt-in: codex_fingerprint_mode set on
+	// the auth file. It works independently of the global identity-confuse
+	// toggle, and an explicit "off" opts this account out of all confusion.
+	if fpCfg := helps.ResolveCodexFingerprintConfig(metadata, authID); fpCfg.Mode != "" {
+		if fpCfg.Mode == helps.CodexFingerprintOff {
+			return rawJSON, codexIdentityConfuseState{}
+		}
+		return applyCodexFingerprintConvergeBody(fpCfg, auth, rawJSON)
+	}
+
+	// Legacy per-client-value confusion, gated by the global toggle.
+	if !codexIdentityConfuseEnabled(cfg) || auth == nil || authID == "" || len(rawJSON) == 0 {
 		return rawJSON, codexIdentityConfuseState{}
 	}
 
-	state := codexIdentityConfuseState{enabled: true, authID: strings.TrimSpace(auth.ID)}
+	state := codexIdentityConfuseState{enabled: true, authID: authID}
 	if promptCacheKey := strings.TrimSpace(gjson.GetBytes(userPayload, "prompt_cache_key").String()); promptCacheKey != "" {
 		state.originalPromptCacheKey = promptCacheKey
 		state.promptCacheKey = codexIdentityConfuseUUID(auth.ID, "prompt-cache", promptCacheKey)
@@ -180,6 +201,49 @@ func applyCodexIdentityConfuseBody(cfg *config.Config, auth *cliproxyauth.Auth, 
 	return rawJSON, state
 }
 
+// applyCodexFingerprintConvergeBody converges the account-level device/session
+// fingerprint in the upstream request body. Installation is always converged;
+// session/full modes additionally converge the session and thread identifiers.
+func applyCodexFingerprintConvergeBody(fpCfg helps.CodexFingerprintConfig, auth *cliproxyauth.Auth, rawJSON []byte) ([]byte, codexIdentityConfuseState) {
+	if auth == nil || len(rawJSON) == 0 || !gjson.ParseBytes(rawJSON).IsObject() {
+		return rawJSON, codexIdentityConfuseState{}
+	}
+	state := codexIdentityConfuseState{
+		enabled:        true,
+		authID:         strings.TrimSpace(auth.ID),
+		mode:           fpCfg.Mode,
+		installationID: fpCfg.InstallationID,
+		sessionID:      fpCfg.SessionID,
+		threadID:       fpCfg.ThreadID,
+	}
+	body := rawJSON
+
+	// Capture the client's real session identifier before overwriting it; the
+	// session mode derives one stable thread per client session from it.
+	originalSessionID := strings.TrimSpace(gjson.GetBytes(body, "client_metadata.session_id").String())
+	state.originalPromptCacheKey = originalSessionID
+	if fpCfg.Mode == helps.CodexFingerprintSession && state.threadID == "" {
+		state.threadID = helps.CodexFingerprintThreadID(fpCfg.Seed, originalSessionID)
+	}
+
+	body, _ = sjson.SetBytes(body, "client_metadata.x-codex-installation-id", state.installationID)
+	if state.sessionID != "" {
+		body, _ = sjson.SetBytes(body, "client_metadata.session_id", state.sessionID)
+		body, _ = sjson.SetBytes(body, "client_metadata.thread_id", state.threadID)
+		body, _ = sjson.SetBytes(body, "client_metadata.x-codex-window-id", state.threadID+":0")
+		// The prompt cache key defaults to the client session identifier; only
+		// that default is converged. Explicit custom cache keys stay untouched.
+		if promptCacheKey := strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String()); promptCacheKey != "" && promptCacheKey == originalSessionID {
+			state.promptCacheKey = state.sessionID
+			body = helps.SetStringIfDifferent(body, "prompt_cache_key", state.promptCacheKey)
+		}
+	}
+	if turnMetadata := strings.TrimSpace(gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata").String()); turnMetadata != "" {
+		body, _ = sjson.SetBytes(body, "client_metadata.x-codex-turn-metadata", applyCodexTurnMetadataIdentityConfuse(turnMetadata, &state))
+	}
+	return body, state
+}
+
 func applyCodexIdentityConfuseHeaders(headers http.Header, state *codexIdentityConfuseState) {
 	if headers == nil {
 		return
@@ -191,6 +255,26 @@ func applyCodexIdentityConfuseHeaders(headers http.Header, state *codexIdentityC
 	if rawTurnMetadata := strings.TrimSpace(headers.Get("X-Codex-Turn-Metadata")); rawTurnMetadata != "" {
 		headers.Set("X-Codex-Turn-Metadata", applyCodexTurnMetadataIdentityConfuse(rawTurnMetadata, state))
 	}
+
+	// Per-account convergence: installation is always rewritten; session/full
+	// modes additionally rewrite the session, thread and window identifiers.
+	if state.installationID != "" {
+		headers.Set("X-Codex-Installation-Id", state.installationID)
+	}
+	if state.sessionID != "" {
+		setCodexSessionHeaderCasePreserved(headers, "session_id", state.sessionID)
+		setHeaderCasePreserved(headers, "session-id", state.sessionID)
+		setHeaderCasePreserved(headers, "Conversation_id", state.sessionID)
+	}
+	if state.threadID != "" {
+		headers.Set("X-Client-Request-Id", state.threadID)
+		headers.Set("Thread-Id", state.threadID)
+		headers.Set("X-Codex-Window-Id", state.threadID+":0")
+	}
+	if state.sessionID != "" || state.threadID != "" {
+		return
+	}
+
 	if state.promptCacheKey == "" {
 		return
 	}
@@ -209,6 +293,16 @@ func applyCodexTurnMetadataIdentityConfuse(rawTurnMetadata string, state *codexI
 	if state == nil || !state.enabled {
 		return updatedTurnMetadata
 	}
+	// Per-account convergence: rewrite the identity fields that exist.
+	if state.installationID != "" && gjson.Get(rawTurnMetadata, "installation_id").Exists() {
+		updatedTurnMetadata, _ = sjson.Set(updatedTurnMetadata, "installation_id", state.installationID)
+	}
+	if state.sessionID != "" && gjson.Get(rawTurnMetadata, "session_id").Exists() {
+		updatedTurnMetadata, _ = sjson.Set(updatedTurnMetadata, "session_id", state.sessionID)
+	}
+	if state.threadID != "" && gjson.Get(rawTurnMetadata, "thread_id").Exists() {
+		updatedTurnMetadata, _ = sjson.Set(updatedTurnMetadata, "thread_id", state.threadID)
+	}
 	if state.promptCacheKey != "" && gjson.Get(rawTurnMetadata, "prompt_cache_key").Exists() {
 		updatedTurnMetadata, _ = sjson.Set(updatedTurnMetadata, "prompt_cache_key", state.promptCacheKey)
 	} else if state.promptCacheKey != "" && state.originalPromptCacheKey != "" {
@@ -217,7 +311,9 @@ func applyCodexTurnMetadataIdentityConfuse(rawTurnMetadata string, state *codexI
 	if turnID := strings.TrimSpace(gjson.Get(rawTurnMetadata, "turn_id").String()); turnID != "" {
 		updatedTurnMetadata, _ = sjson.Set(updatedTurnMetadata, "turn_id", state.confuseTurnID(turnID))
 	}
-	if state.promptCacheKey != "" && gjson.Get(rawTurnMetadata, "window_id").Exists() {
+	if state.threadID != "" && gjson.Get(rawTurnMetadata, "window_id").Exists() {
+		updatedTurnMetadata, _ = sjson.Set(updatedTurnMetadata, "window_id", state.threadID+":0")
+	} else if state.promptCacheKey != "" && gjson.Get(rawTurnMetadata, "window_id").Exists() {
 		updatedTurnMetadata, _ = sjson.Set(updatedTurnMetadata, "window_id", state.promptCacheKey+":0")
 	}
 	return updatedTurnMetadata

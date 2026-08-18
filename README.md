@@ -140,6 +140,33 @@ PackyCode provides special discounts for our software users: register using <a h
 
 CLIProxyAPI Guides: [https://help.router-for.me/](https://help.router-for.me/)
 
+## Codex Fingerprint Convergence
+
+When several users share one Codex OAuth account, every client carries its own
+installation/session/thread identifiers and the upstream provider counts devices
+and sessions from them. Per-account convergence rewrites those identifiers to
+account-level constants so the upstream sees one stable device profile. Set these
+keys on the auth file (`auths/*.json`), and they apply to HTTP/SSE and WebSocket
+requests with upstream identifiers restored in responses:
+
+```json
+{
+  "codex_fingerprint_mode": "device",
+  "codex_fingerprint_seed": "00000000-0000-4000-8000-000000000000",
+  "codex_fingerprint_installation_id": "11111111-1111-4111-8111-111111111111"
+}
+```
+
+- `codex_fingerprint_mode`: `device` (one installation per account, sessions stay
+  per client), `session` (one installation + one session; each client session
+  still derives its own stable thread), `full` (installation + session + thread
+  all account constants, most aggressive), or `off` (disable all confusion for
+  this account). Unset keeps the legacy global `codex.identity-confuse` behavior.
+- `codex_fingerprint_seed`: optional account UUID the converged identifiers
+  derive from; omit to derive a stable seed from the auth ID.
+- `codex_fingerprint_installation_id`: optional explicit device UUID that takes
+  precedence over the derived installation identifier.
+
 ## Management API
 
 see [MANAGEMENT_API.md](https://help.router-for.me/management/api)
